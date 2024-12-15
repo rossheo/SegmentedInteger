@@ -1,0 +1,42 @@
+﻿syntax = "proto3";
+
+package pb;
+
+message SegmentedInteger
+{
+	message Segment
+	{
+		message Segment64
+		{
+			enum SegmentLimit
+			{
+				SegmentLimit_None = 0;
+				SegmentLimit_Max = 64;
+			};
+
+			optional int64 start = 1;
+			bytes bit_increments = 2;	// start 값으로부터의 증가분 bits (1 ~ 63)
+			bool filled = 3;			// true인 경우 구간 전체 채움 (bit_increments 삭제)
+		}
+
+		message Segment2M
+		{
+			enum SegmentLimit
+			{
+				SegmentLimit_None = 0;
+				SegmentLimit_Max = 2000000;
+			};
+
+			optional int64 start = 1;
+			repeated int64 increments = 2;	// start 값으로부터의 증가분 리스트 (1 ~ 1,999,999)
+		}
+
+		oneof segments_oneof
+		{
+			Segment64 segment64 = 1;
+			Segment2M segment2M = 2;
+		}
+	}
+
+	repeated Segment segments = 1;
+}
