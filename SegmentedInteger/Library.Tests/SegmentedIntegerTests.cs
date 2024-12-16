@@ -17,10 +17,14 @@ public class SegmentedIntegerTests
             testSet.Add(i);
         }
 
-        using ElapseWriter elapse = new(TestContext.Current!.OutputWriter, disableStartLogging: true);
+        Pb.SegmentedInteger converted;
+        SortedSet<Int64> results;
 
-        SegmentedInteger.ConvertTo(testSet, out Pb.SegmentedInteger converted);
-        SegmentedInteger.ConvertTo(converted, out SortedSet<Int64> results);
+        using (ElapseWriter elapse = new(TestContext.Current!.OutputWriter, disableStartLogging: true))
+        {
+            SegmentedInteger.ConvertTo(testSet, out converted);
+            SegmentedInteger.ConvertTo(converted, out results);
+        }
 
         await TestContext.Current!.OutputWriter.WriteLineAsync(
             $"IntSize: {testSet.Count * 4:N0}, pbSize: {converted.CalculateSize():N0}");
@@ -37,10 +41,14 @@ public class SegmentedIntegerTests
             testSet.Add(i);
         }
 
-        using ElapseWriter elapse = new(TestContext.Current!.OutputWriter, disableStartLogging: true);
+        Pb.SegmentedInteger converted;
+        SortedSet<Int64> results;
 
-        SegmentedInteger.ConvertTo(testSet, out Pb.SegmentedInteger converted);
-        SegmentedInteger.ConvertTo(converted, out SortedSet<Int64> results);
+        using (ElapseWriter elapse = new(TestContext.Current!.OutputWriter, disableStartLogging: true))
+        {
+            SegmentedInteger.ConvertTo(testSet, out converted);
+            SegmentedInteger.ConvertTo(converted, out results);
+        }
 
         await TestContext.Current!.OutputWriter.WriteLineAsync(
             $"IntSize: {testSet.Count * 4:N0}, pbSize: {converted.CalculateSize():N0}");
@@ -78,10 +86,14 @@ public class SegmentedIntegerTests
             }
         }
 
-        using ElapseWriter elapse = new(TestContext.Current!.OutputWriter, disableStartLogging: true);
+        Pb.SegmentedInteger converted;
+        SortedSet<Int64> results;
 
-        SegmentedInteger.ConvertTo(testSet, out Pb.SegmentedInteger converted);
-        SegmentedInteger.ConvertTo(converted, out SortedSet<Int64> results);
+        using (ElapseWriter elapse = new(TestContext.Current!.OutputWriter, disableStartLogging: true))
+        {
+            SegmentedInteger.ConvertTo(testSet, out converted);
+            SegmentedInteger.ConvertTo(converted, out results);
+        }
 
         await TestContext.Current!.OutputWriter.WriteLineAsync(
             $"IntSize: {testSet.Count * 4:N0}, pbSize: {converted.CalculateSize():N0}");
@@ -119,10 +131,14 @@ public class SegmentedIntegerTests
             }
         }
 
-        using ElapseWriter elapse = new(TestContext.Current!.OutputWriter, disableStartLogging: true);
+        Pb.SegmentedInteger converted;
+        SortedSet<Int64> results;
 
-        SegmentedInteger.ConvertTo(testSet, out Pb.SegmentedInteger converted);
-        SegmentedInteger.ConvertTo(converted, out SortedSet<Int64> results);
+        using (ElapseWriter elapse = new(TestContext.Current!.OutputWriter, disableStartLogging: true))
+        {
+            SegmentedInteger.ConvertTo(testSet, out converted);
+            SegmentedInteger.ConvertTo(converted, out results);
+        }
 
         await TestContext.Current!.OutputWriter.WriteLineAsync(
             $"IntSize: {testSet.Count * 4:N0}, pbSize: {converted.CalculateSize():N0}");
