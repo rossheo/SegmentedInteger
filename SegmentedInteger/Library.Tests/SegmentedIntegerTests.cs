@@ -27,7 +27,7 @@ public class SegmentedIntegerTests
         }
 
         await TestContext.Current!.OutputWriter.WriteLineAsync(
-            $"IntSize: {testSet.Count * 4:N0}, pbSize: {converted.CalculateSize():N0}");
+            $"IntSize: {testSet.Count * sizeof(Int64):N0}, pbSize: {converted.CalculateSize():N0}");
 
         await Assert.That(testSet).IsEquivalentCollectionTo(results);
     }
@@ -51,7 +51,7 @@ public class SegmentedIntegerTests
         }
 
         await TestContext.Current!.OutputWriter.WriteLineAsync(
-            $"IntSize: {testSet.Count * 4:N0}, pbSize: {converted.CalculateSize():N0}");
+            $"IntSize: {testSet.Count * sizeof(Int64):N0}, pbSize: {converted.CalculateSize():N0}");
 
         await Assert.That(testSet).IsEquivalentCollectionTo(results);
     }
@@ -96,7 +96,7 @@ public class SegmentedIntegerTests
         }
 
         await TestContext.Current!.OutputWriter.WriteLineAsync(
-            $"IntSize: {testSet.Count * 4:N0}, pbSize: {converted.CalculateSize():N0}");
+            $"IntSize: {testSet.Count * sizeof(Int64):N0}, pbSize: {converted.CalculateSize():N0}");
 
         await Assert.That(testSet).IsEquivalentCollectionTo(results);
     }
@@ -141,7 +141,7 @@ public class SegmentedIntegerTests
         }
 
         await TestContext.Current!.OutputWriter.WriteLineAsync(
-            $"IntSize: {testSet.Count * 4:N0}, pbSize: {converted.CalculateSize():N0}");
+            $"IntSize: {testSet.Count * sizeof(Int64):N0}, pbSize: {converted.CalculateSize():N0}");
 
         await Assert.That(testSet).IsEquivalentCollectionTo(results);
     }
