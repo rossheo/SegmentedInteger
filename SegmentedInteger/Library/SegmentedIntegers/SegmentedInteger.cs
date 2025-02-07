@@ -10,8 +10,16 @@ public static class SegmentedInteger
     {
         pbSegmentedInteger = new();
 
+#if DEBUG
+        // 빈 컨테이너는 지원하지 않는다.
+        Debug.Assert(sortedIntegers.Count != 0);
+
+        // 음수는 지원하지 않는다.
+        Debug.Assert(sortedIntegers.Min() >= 0);
+
         // Type은 Int64를 지원하고, 최대 개수는 Int32 Max
         Debug.Assert(sortedIntegers.Count < Int32.MaxValue);
+#endif
 
         List<Int64> segment64Increments = [];
         Pb.SegmentedInteger.Types.Segment.Types.Segment64 pbSegment64 = new();
