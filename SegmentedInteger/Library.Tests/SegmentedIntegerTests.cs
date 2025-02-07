@@ -9,6 +9,26 @@ namespace Library.Tests;
 public class SegmentedIntegerTests
 {
     [Test]
+    public async Task EmptyTest()
+    {
+        SortedSet<Int64> testSet = [];
+
+        Pb.SegmentedInteger converted;
+        SortedSet<Int64> results;
+
+        using (ElapseWriter elapse = new(TestContext.Current!.OutputWriter, disableStartLogging: true))
+        {
+            SegmentedInteger.ConvertTo(testSet, out converted);
+            SegmentedInteger.ConvertTo(converted, out results);
+        }
+
+        await TestContext.Current!.OutputWriter.WriteLineAsync(
+            $"IntSize: {testSet.Count * sizeof(Int64):N0}, pbSize: {converted.CalculateSize():N0}");
+
+        await Assert.That(testSet).IsEquivalentCollectionTo(results);
+    }
+
+    [Test]
     public async Task From0To099Test()
     {
         SortedSet<Int64> testSet = [];
