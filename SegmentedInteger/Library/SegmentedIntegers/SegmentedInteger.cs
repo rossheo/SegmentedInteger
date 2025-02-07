@@ -20,23 +20,21 @@ public static class SegmentedInteger
         Int64 max = Convert.ToInt64(
             Pb.SegmentedInteger.Types.Segment.Types.Segment64.Types.SegmentLimit.Max);
 
-        List<Int64> integers = [.. sortedIntegers];
-
-        for (Int32 i = 0; i < integers.Count; ++i)
+        for (Int32 i = 0; i < sortedIntegers.Count; ++i)
         {
-            Int64 currentValue = integers[i];
-            Int64? nextValue = (i + 1 < integers.Count) ? integers[i + 1] : null;
+            Int64 currentValue = sortedIntegers.ElementAt(i);
+            Int64? nextValue = (i + 1 < sortedIntegers.Count) ? sortedIntegers.ElementAt(i + 1) : null;
             Int64 diffValue = nextValue.HasValue ? (nextValue.Value - currentValue) : 0;
 
             bool useSegment64 = pbSegment64.HasStart || (diffValue > 0 && diffValue < max);
 
-            if (!useSegment64 && pbSegment64.HasStart)
-            {
-                AddSegment64(pbSegmentedInteger, ref segment64Increments, ref pbSegment64);
-            }
-            else if (useSegment64 && pbSegment2M.HasStart)
+            if (useSegment64 && pbSegment2M.HasStart)
             {
                 AddSegment2M(pbSegmentedInteger, ref pbSegment2M);
+            }
+            else if (!useSegment64 && pbSegment64.HasStart)
+            {
+                AddSegment64(pbSegmentedInteger, ref segment64Increments, ref pbSegment64);
             }
 
             if (useSegment64)

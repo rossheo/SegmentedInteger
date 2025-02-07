@@ -7,11 +7,11 @@
   </PropertyGroup>
 
   <Target Name="PreBuild" BeforeTargets="PreBuildEvent">
-    <Exec Command="$(ProjectDir)..\..\Tools\protoc-29.1-win64\bin\protoc.exe --proto_path=$(ProjectDir)Protos --csharp_out=$(ProjectDir)ProtoOuts default.proto&quot;" />
+    <Exec Command="$(ProjectDir)..\..\Tools\protoc-29.3-win64\bin\protoc.exe --proto_path=$(ProjectDir)Protos --csharp_out=$(ProjectDir)ProtoOuts default.proto&quot;" />
   </Target>
 
   <ItemGroup>
-    <PackageReference Include="Google.Protobuf" Version="3.29.1" />
+    <PackageReference Include="Google.Protobuf" Version="3.29.3" />
   </ItemGroup>
 
 </Project>
