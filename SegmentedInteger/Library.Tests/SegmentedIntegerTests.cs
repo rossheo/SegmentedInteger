@@ -1,4 +1,4 @@
-﻿using CsvHelper;
+using CsvHelper;
 using CsvHelper.Configuration;
 using Library.Disposables;
 using Library.SegmentedIntegers;
@@ -18,14 +18,14 @@ public class SegmentedIntegerTests
 
         using (ElapseWriter elapse = new(TestContext.Current!.OutputWriter, disableStartLogging: true))
         {
-            SegmentedInteger.ConvertTo(testSet, out converted);
-            SegmentedInteger.ConvertTo(converted, out results);
+            SegmentedInteger.Encode(testSet, out converted);
+            SegmentedInteger.Decode(converted, out results);
         }
 
         await TestContext.Current!.OutputWriter.WriteLineAsync(
             $"IntSize: {testSet.Count * sizeof(Int64):N0}, pbSize: {converted.CalculateSize():N0}");
 
-        await Assert.That(testSet).IsEquivalentCollectionTo(results);
+        await Assert.That(testSet).IsEquivalentTo(results);
     }
 
     [Test]
@@ -42,14 +42,14 @@ public class SegmentedIntegerTests
 
         using (ElapseWriter elapse = new(TestContext.Current!.OutputWriter, disableStartLogging: true))
         {
-            SegmentedInteger.ConvertTo(testSet, out converted);
-            SegmentedInteger.ConvertTo(converted, out results);
+            SegmentedInteger.Encode(testSet, out converted);
+            SegmentedInteger.Decode(converted, out results);
         }
 
         await TestContext.Current!.OutputWriter.WriteLineAsync(
             $"IntSize: {testSet.Count * sizeof(Int64):N0}, pbSize: {converted.CalculateSize():N0}");
 
-        await Assert.That(testSet).IsEquivalentCollectionTo(results);
+        await Assert.That(testSet).IsEquivalentTo(results);
     }
 
     [Test]
@@ -66,14 +66,14 @@ public class SegmentedIntegerTests
 
         using (ElapseWriter elapse = new(TestContext.Current!.OutputWriter, disableStartLogging: true))
         {
-            SegmentedInteger.ConvertTo(testSet, out converted);
-            SegmentedInteger.ConvertTo(converted, out results);
+            SegmentedInteger.Encode(testSet, out converted);
+            SegmentedInteger.Decode(converted, out results);
         }
 
         await TestContext.Current!.OutputWriter.WriteLineAsync(
             $"IntSize: {testSet.Count * sizeof(Int64):N0}, pbSize: {converted.CalculateSize():N0}");
 
-        await Assert.That(testSet).IsEquivalentCollectionTo(results);
+        await Assert.That(testSet).IsEquivalentTo(results);
     }
 
     [Test]
@@ -111,14 +111,14 @@ public class SegmentedIntegerTests
 
         using (ElapseWriter elapse = new(TestContext.Current!.OutputWriter, disableStartLogging: true))
         {
-            SegmentedInteger.ConvertTo(testSet, out converted);
-            SegmentedInteger.ConvertTo(converted, out results);
+            SegmentedInteger.Encode(testSet, out converted);
+            SegmentedInteger.Decode(converted, out results);
         }
 
         await TestContext.Current!.OutputWriter.WriteLineAsync(
             $"IntSize: {testSet.Count * sizeof(Int64):N0}, pbSize: {converted.CalculateSize():N0}");
 
-        await Assert.That(testSet).IsEquivalentCollectionTo(results);
+        await Assert.That(testSet).IsEquivalentTo(results);
     }
 
     [Test]
@@ -156,13 +156,13 @@ public class SegmentedIntegerTests
 
         using (ElapseWriter elapse = new(TestContext.Current!.OutputWriter, disableStartLogging: true))
         {
-            SegmentedInteger.ConvertTo(testSet, out converted);
-            SegmentedInteger.ConvertTo(converted, out results);
+            SegmentedInteger.Encode(testSet, out converted);
+            SegmentedInteger.Decode(converted, out results);
         }
 
         await TestContext.Current!.OutputWriter.WriteLineAsync(
             $"IntSize: {testSet.Count * sizeof(Int64):N0}, pbSize: {converted.CalculateSize():N0}");
 
-        await Assert.That(testSet).IsEquivalentCollectionTo(results);
+        await Assert.That(testSet).IsEquivalentTo(results);
     }
 }

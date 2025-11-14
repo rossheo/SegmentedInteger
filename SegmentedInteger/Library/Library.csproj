@@ -1,17 +1,18 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
   <Target Name="PreBuild" BeforeTargets="PreBuildEvent">
-    <Exec Command="$(ProjectDir)..\..\Tools\protoc-29.3-win64\bin\protoc.exe --proto_path=$(ProjectDir)Protos --csharp_out=$(ProjectDir)ProtoOuts default.proto&quot;" />
+    <MakeDir Directories="$(ProjectDir)ProtoOuts" />
+    <Exec Command="$(ProjectDir)..\..\Tools\protoc-33.1-win64\bin\protoc.exe --proto_path=$(ProjectDir)Protos --csharp_out=$(ProjectDir)ProtoOuts default.proto" />
   </Target>
 
   <ItemGroup>
-    <PackageReference Include="Google.Protobuf" Version="3.29.3" />
+    <PackageReference Include="Google.Protobuf" Version="3.33.1" />
   </ItemGroup>
 
 </Project>

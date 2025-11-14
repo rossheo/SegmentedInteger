@@ -1,261 +1,436 @@
-﻿using Google.Protobuf;
-using System.Diagnostics;
+using Google.Protobuf;
+using System.Buffers;
+using System.Buffers.Binary;
+using System.Numerics;
+using System.Runtime.CompilerServices;
 
 namespace Library.SegmentedIntegers;
 
+using PbSegment = Pb.SegmentedInteger.Types.Segment;
+using PbSegment2M = Pb.SegmentedInteger.Types.Segment.Types.Segment2M;
+using PbSegment64 = Pb.SegmentedInteger.Types.Segment.Types.Segment64;
+using PbSegmented = Pb.SegmentedInteger;
+
+/// <summary>
+/// 정렬된 비음수 Int64 시퀀스를 두 가지 세그먼트 방식으로 압축:
+/// - Segment64: 연속된 64개 미만 범위를 비트맵으로 저장
+/// - Segment2M: 최대 2,000,000 범위의 증분을 리스트로 저장
+/// </summary>
 public static class SegmentedInteger
 {
-    public static void ConvertTo(SortedSet<Int64> sortedIntegers,
-        out Pb.SegmentedInteger pbSegmentedInteger)
-    {
-        pbSegmentedInteger = new();
+	private const Int32 BitsPerByte = 8;
+	private const Int32 PoolThreshold = 1024;
 
-#if DEBUG
-        // 음수는 지원하지 않는다.
-        if (sortedIntegers.Count != 0)
-        {
-            Debug.Assert(sortedIntegers.Min() >= 0);
-        }
+	private static readonly Int64 Segment64Max = (Int64)PbSegment64.Types.SegmentLimit.Max;
+	private static readonly Int64 Segment2MMax = (Int64)PbSegment2M.Types.SegmentLimit.Max;
 
-        // Type은 Int64를 지원하고, 최대 개수는 Int32 Max
-        Debug.Assert(sortedIntegers.Count < Int32.MaxValue);
-#endif
+	private enum Mode { None, S64, S2M }
 
-        List<Int64> segment64Increments = [];
-        Pb.SegmentedInteger.Types.Segment.Types.Segment64 pbSegment64 = new();
-        Pb.SegmentedInteger.Types.Segment.Types.Segment2M pbSegment2M = new();
+	/// <summary>
+	/// SortedSet을 세그먼트 구조로 인코딩합니다.
+	/// </summary>
+	/// <param name="sorted">인코딩할 정렬된 집합 (중복 없음, 비음수)</param>
+	/// <param name="proto">출력 세그먼트 구조</param>
+	/// <exception cref="ArgumentNullException">sorted가 null인 경우</exception>
+	public static void Encode(SortedSet<Int64> sorted, out PbSegmented proto)
+	{
+		ArgumentNullException.ThrowIfNull(sorted);
 
-        Int64 max = Convert.ToInt64(
-            Pb.SegmentedInteger.Types.Segment.Types.Segment64.Types.SegmentLimit.Max);
+		if (sorted.Count == 0)
+		{
+			proto = new();
+			return;
+		}
 
-        for (Int32 i = 0; i < sortedIntegers.Count; ++i)
-        {
-            Int64 currentValue = sortedIntegers.ElementAt(i);
-            Int64? nextValue = (i + 1 < sortedIntegers.Count) ? sortedIntegers.ElementAt(i + 1) : null;
-            Int64 diffValue = nextValue.HasValue ? (nextValue.Value - currentValue) : 0;
+		Int64[]? rented = sorted.Count >= PoolThreshold
+			? ArrayPool<Int64>.Shared.Rent(sorted.Count)
+			: null;
 
-            bool useSegment64 = pbSegment64.HasStart || (diffValue > 0 && diffValue < max);
+		Int64[] buffer = rented ?? new Int64[sorted.Count];
 
-            if (useSegment64 && pbSegment2M.HasStart)
-            {
-                AddSegment2M(pbSegmentedInteger, ref pbSegment2M);
-            }
-            else if (!useSegment64 && pbSegment64.HasStart)
-            {
-                AddSegment64(pbSegmentedInteger, ref segment64Increments, ref pbSegment64);
-            }
+		try
+		{
+			sorted.CopyTo(buffer, 0);
+			Encode(buffer.AsSpan(0, sorted.Count), out proto, useSortValidation: false);
+		}
+		finally
+		{
+			if (rented is not null)
+			{
+				ArrayPool<Int64>.Shared.Return(rented, clearArray: false);
+			}
+		}
+	}
 
-            if (useSegment64)
-            {
-                HandleSegment64(currentValue, nextValue, pbSegmentedInteger,
-                    ref segment64Increments, ref pbSegment64);
-            }
-            else
-            {
-                HandleSegment2M(currentValue, nextValue, pbSegmentedInteger,
-                    ref pbSegment2M);
-            }
-        }
+	/// <summary>
+	/// 정렬된 배열을 세그먼트 구조로 인코딩합니다.
+	/// </summary>
+	/// <param name="sorted">인코딩할 정렬된 배열</param>
+	/// <param name="proto">출력 세그먼트 구조</param>
+	/// <exception cref="ArgumentException">값이 음수이거나 엄격한 오름차순이 아닌 경우</exception>
+	public static void Encode(ReadOnlySpan<Int64> sorted, out PbSegmented proto,
+		bool useSortValidation = true)
+	{
+		proto = new();
+		if (sorted.Length == 0)
+		{
+			return;
+		}
 
-        if (pbSegment64.HasStart)
-        {
-            AddSegment64(pbSegmentedInteger, ref segment64Increments, ref pbSegment64);
-        }
-        else if (pbSegment2M.HasStart)
-        {
-            AddSegment2M(pbSegmentedInteger, ref pbSegment2M);
-        }
-    }
+		ValidateNonNegative(sorted);
 
-    private static void HandleSegment64(
-        Int64 currentValue, Int64? nextValue,
-        Pb.SegmentedInteger pbSegmentedInteger,
-        ref List<Int64> segment64Increments,
-        ref Pb.SegmentedInteger.Types.Segment.Types.Segment64 pbSegment)
-    {
-        Int64 max = Convert.ToInt64(
-            Pb.SegmentedInteger.Types.Segment.Types.Segment64.Types.SegmentLimit.Max);
+		if (useSortValidation)
+		{
+			ValidateSorted(sorted);
+		}
 
-        if (!pbSegment.HasStart)
-        {
-            pbSegment.Start = currentValue;
-            return;
-        }
+		EncodeCore(sorted, proto);
+	}
 
-        Int64 increment = currentValue - pbSegment.Start;
-        if (increment >= max)
-        {
-            AddSegment64(pbSegmentedInteger, ref segment64Increments, ref pbSegment);
-            pbSegment.Start = currentValue;
-            return;
-        }
+	/// <summary>
+	/// 세그먼트 구조를 SortedSet으로 디코딩합니다.
+	/// </summary>
+	/// <param name="proto">디코딩할 세그먼트 구조</param>
+	/// <param name="integers">출력 정렬된 집합</param>
+	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
+	public static void Decode(PbSegmented proto, out SortedSet<Int64> integers)
+	{
+		ArgumentNullException.ThrowIfNull(proto);
+		integers = [];
 
-        segment64Increments.Add(increment);
+		foreach (PbSegment segment in proto.Segments)
+		{
+			if (segment.SegmentsOneofCase == PbSegment.SegmentsOneofOneofCase.Segment64)
+			{
+				Decode64(segment.Segment64, integers);
+			}
+			else if (segment.SegmentsOneofCase == PbSegment.SegmentsOneofOneofCase.Segment2M)
+			{
+				Decode2M(segment.Segment2M, integers);
+			}
+		}
+	}
 
-        if (segment64Increments.Count == max - 1)
-        {
-            AddSegment64(pbSegmentedInteger, ref segment64Increments, ref pbSegment);
-            return;
-        }
+	private static void ValidateNonNegative(ReadOnlySpan<Int64> sorted)
+	{
+		Int64 prev = sorted[0];
+		if (prev < 0)
+		{
+			throw new ArgumentException("Values must be non-negative.", nameof(sorted));
+		}
+	}
 
-        if (nextValue.HasValue)
-        {
-            Int64 nextIncrement = nextValue.Value - pbSegment.Start;
-            if (nextIncrement >= max)
-            {
-                AddSegment64(pbSegmentedInteger, ref segment64Increments, ref pbSegment);
-            }
-        }
-    }
+	private static void ValidateSorted(ReadOnlySpan<Int64> sorted)
+	{
+		Int64 prev = sorted[0];
+		for (Int32 i = 1; i < sorted.Length; ++i)
+		{
+			Int64 current = sorted[i];
+			if (current <= prev)
+			{
+				throw new ArgumentException("Input must be strictly ascending.", nameof(sorted));
+			}
 
-    private static void HandleSegment2M(
-        Int64 currentValue, Int64? nextValue,
-        Pb.SegmentedInteger pbSegmentedInteger,
-        ref Pb.SegmentedInteger.Types.Segment.Types.Segment2M pbSegment)
-    {
-        Int64 max = Convert.ToInt64(
-            Pb.SegmentedInteger.Types.Segment.Types.Segment2M.Types.SegmentLimit.Max);
+			prev = current;
+		}
+	}
 
-        if (!pbSegment.HasStart)
-        {
-            pbSegment.Start = currentValue;
-            return;
-        }
+	private static void EncodeCore(ReadOnlySpan<Int64> sorted, PbSegmented proto)
+	{
+		if (sorted.Length == 1)
+		{
+			// 단일 요소: S2M으로 추가
+			proto.Segments.Add(new PbSegment
+			{
+				Segment2M = new PbSegment2M
+				{
+					Start = sorted[0]
+				}
+			});
 
-        Int64 increment = currentValue - pbSegment.Start;
-        if (increment >= max)
-        {
-            AddSegment2M(pbSegmentedInteger, ref pbSegment);
-            pbSegment.Start = currentValue;
-            return;
-        }
+			return;
+		}
 
-        pbSegment.Increments.Add(increment);
+		EncodingContext context = default;
+		Int32 lastIdx = sorted.Length - 1;
 
-        if (nextValue.HasValue)
-        {
-            Int64 nextIncrement = nextValue.Value - pbSegment.Start;
-            if (nextIncrement >= max)
-            {
-                AddSegment2M(pbSegmentedInteger, ref pbSegment);
-            }
-        }
-    }
+		for (Int32 idx = 0; idx < lastIdx; ++idx)
+		{
+			ProcessValue(ref context, sorted[idx], sorted[idx + 1], proto);
+		}
 
-    private static void AddSegment64(
-        Pb.SegmentedInteger pbSegmentedInteger,
-        ref List<Int64> segment64Increments,
-        ref Pb.SegmentedInteger.Types.Segment.Types.Segment64 pbSegment)
-    {
-        Int64 max = Convert.ToInt64(
-            Pb.SegmentedInteger.Types.Segment.Types.Segment64.Types.SegmentLimit.Max);
+		if (context.Mode != Mode.S2M)
+		{
+			context.FlushActive(proto);
+			context.Mode = Mode.S2M;
+			context.Initialize(sorted[lastIdx]);
+		}
+		else
+		{
+			context.AddValue(sorted[lastIdx], proto);
+		}
 
-        if (segment64Increments.Count == max - 1)
-        {
-            pbSegment.Filled = true;
-        }
-        else if (segment64Increments.Count > 0)
-        {
-            const Int32 bitSize = 8;
+		context.FlushActive(proto);
+	}
 
-            Span<byte> stackBuffer = stackalloc byte[(Int32)max / bitSize];
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	private static void ProcessValue(
+		ref EncodingContext context,
+		Int64 current,
+		Int64 next,
+		PbSegmented proto)
+	{
+		Mode desired = (next - current) < Segment64Max ? Mode.S64 : Mode.S2M;
 
-            Int32 byteIndex = 0;
-            foreach (Int64 increment in segment64Increments)
-            {
-                byteIndex = ((Int32)increment - 1) / bitSize;
-                Int32 bitIndex = ((Int32)increment - 1) % bitSize;
-                stackBuffer[byteIndex] |= (byte)(1 << bitIndex);
-            }
+		if (context.Mode != desired)
+		{
+			context.FlushActive(proto);
+			context.Mode = desired;
+			context.Initialize(current);
+		}
+		else
+		{
+			context.AddValue(current, proto);
+		}
 
-            pbSegment.BitIncrements = ByteString.CopyFrom(stackBuffer[..(byteIndex + 1)]);
-        }
+		if (context.WillOverflow(next))
+		{
+			context.FlushActive(proto);
+			context.Mode = Mode.None;
+		}
+	}
 
-        segment64Increments.Clear();
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	private static void Decode64(PbSegment64 segment, SortedSet<Int64> set)
+	{
+		Int64 start = segment.Start;
 
-        pbSegmentedInteger.Segments.Add(new Pb.SegmentedInteger.Types.Segment
-        {
-            Segment64 = pbSegment
-        });
-        pbSegment = new();
-    }
+		if (segment.Filled)
+		{
+			for (Int64 i = 0; i < Segment64Max; ++i)
+			{
+				set.Add(start + i);
+			}
 
-    private static void AddSegment2M(
-        Pb.SegmentedInteger pbSegmentedInteger,
-        ref Pb.SegmentedInteger.Types.Segment.Types.Segment2M pbSegment)
-    {
-        pbSegmentedInteger.Segments.Add(new Pb.SegmentedInteger.Types.Segment
-        {
-            Segment2M = pbSegment
-        });
-        pbSegment = new();
-    }
+			return;
+		}
 
-    public static void ConvertTo(Pb.SegmentedInteger pbSegmentedInteger,
-        out SortedSet<Int64> integers)
-    {
-        integers = [];
+		set.Add(start);
 
-        foreach (Pb.SegmentedInteger.Types.Segment segment in pbSegmentedInteger.Segments)
-        {
-            switch (segment.SegmentsOneofCase)
-            {
-                case Pb.SegmentedInteger.Types.Segment.SegmentsOneofOneofCase.Segment64:
-                    Segment64ToIntegers(segment.Segment64, ref integers);
-                    break;
-                case Pb.SegmentedInteger.Types.Segment.SegmentsOneofOneofCase.Segment2M:
-                    Segment2MToIntegers(segment.Segment2M, ref integers);
-                    break;
-            }
-        }
-    }
+		if (segment.BitIncrements.Length > 0)
+		{
+			for (Int32 i = 0; i < segment.BitIncrements.Length; ++i)
+			{
+				Int32 value = segment.BitIncrements[i];
+				if (value == 0)
+				{
+					continue;
+				}
 
-    private static void Segment64ToIntegers(
-        Pb.SegmentedInteger.Types.Segment.Types.Segment64 pbSegment,
-        ref SortedSet<Int64> integers)
-    {
-        Int64 max = Convert.ToInt64(
-            Pb.SegmentedInteger.Types.Segment.Types.Segment64.Types.SegmentLimit.Max);
+				Int64 baseValue = start + (i * BitsPerByte);
 
-        Int64 start = pbSegment.Start;
-        integers.Add(start);
+				while (value != 0)
+				{
+					Int32 trailingZeros = BitOperations.TrailingZeroCount(value);
+					set.Add(baseValue + trailingZeros + 1);
+					value &= value - 1;
+				}
+			}
+		}
+	}
 
-        if (pbSegment.Filled)
-        {
-            for (Int64 increment = 0; increment < max; ++increment)
-            {
-                integers.Add(start + increment);
-            }
-        }
-        else
-        {
-            const Int32 bitSize = 8;
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	private static void Decode2M(PbSegment2M segment, SortedSet<Int64> set)
+	{
+		Int64 start = segment.Start;
+		set.Add(start);
 
-            for (Int32 byteIndex = 0; byteIndex < pbSegment.BitIncrements.Length; ++byteIndex)
-            {
-                Int64 startValue = start + (byteIndex * bitSize);
+		foreach (Int64 increment in segment.Increments)
+		{
+			set.Add(start + increment);
+		}
+	}
 
-                for (Int32 bitIndex = 0; bitIndex < bitSize; ++bitIndex)
-                {
-                    if ((pbSegment.BitIncrements[byteIndex] & (1 << bitIndex)) != 0)
-                    {
-                        integers.Add(startValue + bitIndex + 1);
-                    }
-                }
-            }
-        }
-    }
+	private struct EncodingContext
+	{
+		public Mode Mode;
+		private Segment64Builder _s64;
+		private Segment2MBuilder _s2m;
 
-    private static void Segment2MToIntegers(
-        Pb.SegmentedInteger.Types.Segment.Types.Segment2M pbSegment,
-        ref SortedSet<Int64> integers)
-    {
-        Int64 start = pbSegment.Start;
-        integers.Add(start);
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public void Initialize(Int64 start)
+		{
+			if (Mode == Mode.S64) _s64.Init(start);
+			else if (Mode == Mode.S2M) _s2m.Init(start);
+		}
 
-        foreach (Int64 increment in pbSegment.Increments)
-        {
-            integers.Add(start + increment);
-        }
-    }
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public void AddValue(Int64 value, PbSegmented output)
+		{
+			if (Mode == Mode.S64) _s64.Add(value, output);
+			else if (Mode == Mode.S2M) _s2m.Add(value, output);
+		}
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public readonly bool WillOverflow(Int64 nextValue)
+			=> Mode switch
+			{
+				Mode.S64 => _s64.WillOverflow(nextValue),
+				Mode.S2M => _s2m.WillOverflow(nextValue),
+				_ => false
+			};
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public void FlushActive(PbSegmented output)
+		{
+			if (Mode == Mode.S64) _s64.Flush(output);
+			else if (Mode == Mode.S2M) _s2m.Flush(output);
+
+			Mode = Mode.None;
+		}
+	}
+
+	private struct Segment64Builder
+	{
+		public bool Active;
+		public Int64 Start;
+		private UInt64 _bits;
+		private Int32 _count;
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public void Init(Int64 start)
+		{
+			Active = true;
+			Start = start;
+			_bits = 0UL;
+			_count = 0;
+		}
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public void Add(Int64 value, PbSegmented output)
+		{
+			Int64 increment = value - Start;
+			if (increment == 0)
+			{
+				return;
+			}
+
+			if (increment >= Segment64Max)
+			{
+				Flush(output);
+				Init(value);
+
+				return;
+			}
+
+			_bits |= 1UL << ((Int32)increment - 1);
+
+			if (++_count == Segment64Max - 1)
+			{
+				Flush(output);
+			}
+		}
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public readonly bool WillOverflow(Int64 nextValue)
+			=> Active && (nextValue - Start) >= Segment64Max;
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public void Flush(PbSegmented output)
+		{
+			if (!Active)
+			{
+				return;
+			}
+
+			PbSegment64 segment = new()
+			{
+				Start = Start
+			};
+
+			if (_count > 0)
+			{
+				if (_count == Segment64Max - 1)
+				{
+					segment.Filled = true;
+				}
+				else
+				{
+					Int32 highest = BitOperations.Log2(_bits);
+					Int32 byteLen = (highest / BitsPerByte) + 1;
+
+					Span<byte> buffer = stackalloc byte[8];
+					BinaryPrimitives.WriteUInt64LittleEndian(buffer, _bits);
+
+					segment.BitIncrements = ByteString.CopyFrom(buffer[..byteLen]);
+				}
+			}
+
+			output.Segments.Add(new PbSegment
+			{
+				Segment64 = segment
+			});
+
+			Active = false;
+		}
+	}
+
+	private struct Segment2MBuilder
+	{
+		public bool Active;
+		public Int64 Start;
+		public PbSegment2M Proto;
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public void Init(Int64 start)
+		{
+			Active = true;
+			Start = start;
+			Proto = new PbSegment2M
+			{
+				Start = start
+			};
+		}
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public void Add(Int64 value, PbSegmented output)
+		{
+			Int64 increment = value - Start;
+			if (increment == 0)
+			{
+				return;
+			}
+
+			if (increment >= Segment2MMax)
+			{
+				Flush(output);
+				Init(value);
+
+				return;
+			}
+
+			Proto.Increments.Add(increment);
+		}
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public readonly bool WillOverflow(Int64 nextValue)
+			=> Active && (nextValue - Start) >= Segment2MMax;
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public void Flush(PbSegmented output)
+		{
+			if (!Active)
+			{
+				return;
+			}
+
+			output.Segments.Add(new PbSegment
+			{
+				Segment2M = Proto
+			});
+
+			Active = false;
+			Proto = null!; // GC가 이전 객체를 수집 가능
+		}
+	}
 }
