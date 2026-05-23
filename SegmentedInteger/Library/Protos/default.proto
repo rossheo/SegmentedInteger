@@ -1,4 +1,4 @@
-﻿syntax = "proto3";
+syntax = "proto3";
 
 package pb;
 
@@ -39,4 +39,73 @@ message SegmentedInteger
 	}
 
 	repeated Segment segments = 1;
+}
+
+message BlockedInteger
+{
+	message Block
+	{
+		message ConstantBlock
+		{
+			sint64 value = 1;
+			int32 count = 2;
+		}
+		message AscendingBlock
+		{
+			enum DiffsLimit
+			{
+				DiffsLimit_None = 0;
+				DiffsLimit_Max = 8191;
+			}
+			sint64 first = 1;
+			repeated uint64 diffs = 2;	// 오름차순: next - prev (양수)
+		}
+		message DescendingBlock
+		{
+			enum DiffsLimit
+			{
+				DiffsLimit_None = 0;
+				DiffsLimit_Max = 8191;
+			}
+			sint64 first = 1;
+			repeated uint64 diffs = 2;	// 내림차순: prev - next (양수)
+		}
+		message ArithmeticBlock
+		{
+			sint64 first = 1;
+			sint64 step = 2;
+			int32 count = 3;
+		}
+		message DeltaBlock
+		{
+			enum RangeLimit
+			{
+				RangeLimit_None = 0;
+				RangeLimit_Max = 16382;
+			}
+			sint64 reference = 1;
+			repeated sint64 deltas = 2;
+		}
+		message AscendingBitmapBlock
+		{
+			sint64 first = 1;
+			uint64 bits = 2;	// bit i(0-indexed, 0~62) 세트 → first+i+1 값 존재
+		}
+		message DescendingBitmapBlock
+		{
+			sint64 first = 1;
+			uint64 bits = 2;	// bit i(0-indexed, 0~62) 세트 → first-i-1 값 존재
+		}
+		oneof block_oneof
+		{
+			ConstantBlock constant = 1;
+			ArithmeticBlock arithmetic = 2;
+			AscendingBlock ascending = 3;
+			AscendingBitmapBlock ascending_bitmap = 4;
+			DeltaBlock delta = 5;
+			DescendingBlock descending = 6;
+			DescendingBitmapBlock descending_bitmap = 7;
+		}
+	}
+	repeated Block blocks = 1;
 }
