@@ -15,15 +15,20 @@ using PbSegmented = Pb.SegmentedInteger;
 /// 정렬된 비음수 Int64 시퀀스를 두 가지 세그먼트 방식으로 압축:
 /// - Segment64: 연속된 64개 미만 범위를 비트맵으로 저장
 /// - Segment2M: 최대 2,000,000 범위의 증분을 리스트로 저장
+/// <para>
+/// 이 인코딩은 deterministic — 같은 입력은 항상 같은 byte 시퀀스를 생성합니다.
+/// 세그먼트 타입 결정 로직을 변경하면 byte 호환성이 깨집니다.
+/// </para>
 /// </summary>
 public static class SegmentedInteger
 {
 	private const Int32 BitsPerByte = 8;
 	private const Int32 BitmapBufferSize = sizeof(UInt64);
 	private const Int32 PoolThreshold = 1024;
+	private const Int32 Segment64MaxIncrements = 63; // = (Int32)Segment64Max - 1
 
-	private static readonly Int64 Segment64Max = (Int64)PbSegment64.Types.SegmentLimit.Max;
-	private static readonly Int64 Segment2MMax = (Int64)PbSegment2M.Types.SegmentLimit.Max;
+	private const Int64 Segment64Max = (Int64)PbSegment64.Types.SegmentLimit.Max;
+	private const Int64 Segment2MMax = (Int64)PbSegment2M.Types.SegmentLimit.Max;
 
 	private enum Mode { None, S64, S2M }
 
@@ -68,6 +73,9 @@ public static class SegmentedInteger
 	/// </summary>
 	/// <param name="sorted">인코딩할 정렬된 배열</param>
 	/// <param name="proto">출력 세그먼트 구조</param>
+	/// <param name="useSortValidation">
+	/// false로 설정 시 입력이 엄격한 오름차순이고 비음수임을 호출자가 보장해야 합니다.
+	/// </param>
 	/// <exception cref="ArgumentException">값이 음수이거나 엄격한 오름차순이 아닌 경우</exception>
 	public static void Encode(ReadOnlySpan<Int64> sorted, out PbSegmented proto,
 		bool useSortValidation = true)
@@ -112,10 +120,11 @@ public static class SegmentedInteger
 		}
 	}
 
+	// 정렬된 입력 가정 하에 최솟값(첫 원소)만 검사.
+	// useSortValidation=false 시 호출자가 전체 범위 비음수 보장 책임.
 	private static void ValidateNonNegative(ReadOnlySpan<Int64> sorted)
 	{
-		Int64 prev = sorted[0];
-		if (prev < 0)
+		if (sorted[0] < 0)
 		{
 			throw new ArgumentException("Values must be non-negative.", nameof(sorted));
 		}
@@ -164,14 +173,14 @@ public static class SegmentedInteger
 		if (context.Mode == Mode.None)
 		{
 			context.Mode = Mode.S2M;
-			context.Initialize(sorted[lastIdx]);
+			context.BeginSegment(sorted[lastIdx]);
 		}
 		else
 		{
-			context.AddValue(sorted[lastIdx], proto);
+			context.AddValue(sorted[lastIdx]);
 		}
 
-		context.FlushActive(proto);
+		context.Flush(proto);
 	}
 
 	/// <summary>
@@ -184,23 +193,23 @@ public static class SegmentedInteger
 		Int64 next,
 		PbSegmented proto)
 	{
+		// gap < 64(Segment64Max)이면 비트맵 방식(S64), 이상이면 증분 리스트 방식(S2M)
 		Mode desired = (next - current) < Segment64Max ? Mode.S64 : Mode.S2M;
 
 		if (context.Mode != desired)
 		{
-			context.FlushActive(proto);
+			context.Flush(proto);
 			context.Mode = desired;
-			context.Initialize(current);
+			context.BeginSegment(current);
 		}
 		else
 		{
-			context.AddValue(current, proto);
+			context.AddValue(current);
 		}
 
 		if (context.WillOverflow(next))
 		{
-			context.FlushActive(proto);
-			context.Mode = Mode.None;
+			context.Flush(proto);
 		}
 	}
 
@@ -246,12 +255,18 @@ public static class SegmentedInteger
 		Int64 start = segment.Start;
 		set.Add(start);
 
+		// 각 increment는 start 기준 절대 오프셋 (value - start). 누적 합산 아님.
 		foreach (Int64 increment in segment.Increments)
 		{
 			set.Add(start + increment);
 		}
 	}
 
+	// 상태 머신:
+	//   None → Mode 설정 + BeginSegment → AddValue* (반복)
+	//        → WillOverflow가 true이면 Flush → None 복귀
+	// 주의: BeginSegment 없이 AddValue 호출 금지.
+	//       WillOverflow는 Mode != None일 때만 의미 있는 값 반환.
 	private struct EncodingContext
 	{
 		public Mode Mode;
@@ -259,17 +274,17 @@ public static class SegmentedInteger
 		private Segment2MBuilder _s2m;
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public void Initialize(Int64 start)
+		public void BeginSegment(Int64 start)
 		{
 			if (Mode == Mode.S64) _s64.Init(start);
 			else if (Mode == Mode.S2M) _s2m.Init(start);
 		}
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public void AddValue(Int64 value, PbSegmented output)
+		public void AddValue(Int64 value)
 		{
-			if (Mode == Mode.S64) _s64.Add(value, output);
-			else if (Mode == Mode.S2M) _s2m.Add(value, output);
+			if (Mode == Mode.S64) _s64.Add(value);
+			else if (Mode == Mode.S2M) _s2m.Add(value);
 		}
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -282,7 +297,7 @@ public static class SegmentedInteger
 			};
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public void FlushActive(PbSegmented output)
+		public void Flush(PbSegmented output)
 		{
 			if (Mode == Mode.S64) _s64.Flush(output);
 			else if (Mode == Mode.S2M) _s2m.Flush(output);
@@ -293,7 +308,6 @@ public static class SegmentedInteger
 
 	private struct Segment64Builder
 	{
-		private bool _active;
 		private Int64 _start;
 		private UInt64 _bits;
 		private Int32 _count;
@@ -301,14 +315,13 @@ public static class SegmentedInteger
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		public void Init(Int64 start)
 		{
-			_active = true;
 			_start = start;
 			_bits = 0UL;
 			_count = 0;
 		}
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public void Add(Int64 value, PbSegmented output)
+		public void Add(Int64 value)
 		{
 			Int64 increment = value - _start;
 			if (increment == 0)
@@ -316,34 +329,17 @@ public static class SegmentedInteger
 				return;
 			}
 
-			if (increment >= Segment64Max)
-			{
-				Flush(output);
-				Init(value);
-
-				return;
-			}
-
 			_bits |= 1UL << ((Int32)increment - 1);
-
-			if (++_count == Segment64Max - 1)
-			{
-				Flush(output);
-			}
+			++_count;
 		}
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		public readonly bool WillOverflow(Int64 nextValue)
-			=> _active && (nextValue - _start) >= Segment64Max;
+			=> (nextValue - _start) >= Segment64Max;
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		public void Flush(PbSegmented output)
 		{
-			if (!_active)
-			{
-				return;
-			}
-
 			PbSegment64 segment = new()
 			{
 				Start = _start
@@ -351,7 +347,7 @@ public static class SegmentedInteger
 
 			if (_count > 0)
 			{
-				if (_count == Segment64Max - 1)
+				if (_count == Segment64MaxIncrements)
 				{
 					segment.Filled = true;
 				}
@@ -371,21 +367,17 @@ public static class SegmentedInteger
 			{
 				Segment64 = segment
 			});
-
-			_active = false;
 		}
 	}
 
 	private struct Segment2MBuilder
 	{
-		private bool _active;
 		private Int64 _start;
 		private PbSegment2M _proto;
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		public void Init(Int64 start)
 		{
-			_active = true;
 			_start = start;
 			_proto = new PbSegment2M
 			{
@@ -394,19 +386,11 @@ public static class SegmentedInteger
 		}
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public void Add(Int64 value, PbSegmented output)
+		public void Add(Int64 value)
 		{
 			Int64 increment = value - _start;
 			if (increment == 0)
 			{
-				return;
-			}
-
-			if (increment >= Segment2MMax)
-			{
-				Flush(output);
-				Init(value);
-
 				return;
 			}
 
@@ -415,23 +399,15 @@ public static class SegmentedInteger
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		public readonly bool WillOverflow(Int64 nextValue)
-			=> _active && (nextValue - _start) >= Segment2MMax;
+			=> (nextValue - _start) >= Segment2MMax;
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		public void Flush(PbSegmented output)
 		{
-			if (!_active)
-			{
-				return;
-			}
-
 			output.Segments.Add(new PbSegment
 			{
 				Segment2M = _proto
 			});
-
-			_active = false;
-			_proto = null!; // GC가 이전 객체를 수집 가능
 		}
 	}
 }
