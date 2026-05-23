@@ -8,11 +8,11 @@
 
   <Target Name="PreBuild" BeforeTargets="PreBuildEvent">
     <MakeDir Directories="$(ProjectDir)ProtoOuts" />
-    <Exec Command="$(ProjectDir)..\..\Tools\protoc-33.1-win64\bin\protoc.exe --proto_path=$(ProjectDir)Protos --csharp_out=$(ProjectDir)ProtoOuts default.proto" />
+    <Exec Command="$(ProjectDir)..\..\Tools\protoc-35.0-win64\bin\protoc.exe --proto_path=$(ProjectDir)Protos --csharp_out=$(ProjectDir)ProtoOuts default.proto" />
   </Target>
 
   <ItemGroup>
-    <PackageReference Include="Google.Protobuf" Version="3.33.1" />
+    <PackageReference Include="Google.Protobuf" Version="3.35.0" />
   </ItemGroup>
 
 </Project>
