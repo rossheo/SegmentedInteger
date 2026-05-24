@@ -7,10 +7,10 @@
 
 ## 클래스 개요
 
-| 클래스 | 입력 조건 | 용도 |
-|---|---|---|
-| `SortedSetInteger` | 정렬된 비음수 `Int64` 집합 | 밀집/희소 정수 집합 압축 |
-| `BlockedInteger` | 임의의 `Int64` 시퀀스 | 순서·중복 보존 압축 |
+| 클래스 | 입력 조건 | 용도 | DataType | 복잡도 |
+|---|---|---|---|---|
+| `SortedSetInteger` | 정렬된 비음수 `Int64` 집합 | 중복되지 않은 정렬된 0 포함 양수 | `SortedSet<Int64>` | 낮음 |
+| `BlockedInteger` | 임의의 `Int64` 시퀀스 | 입력 순서 보존, 중복 숫자 허용 | `IEnumerable<Int64>` | 높음 |
 
 ---
 

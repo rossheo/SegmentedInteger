@@ -9,7 +9,7 @@ namespace Library.SegmentedIntegers;
 using PbChunk = Pb.SortedSetInteger.Types.Chunk;
 using PbBitmapChunk = Pb.SortedSetInteger.Types.Chunk.Types.BitmapChunk;
 using PbIncrementChunk = Pb.SortedSetInteger.Types.Chunk.Types.IncrementChunk;
-using PbSegmented = Pb.SortedSetInteger;
+using PbSortedSetInteger = Pb.SortedSetInteger;
 
 /// <summary>
 /// 정렬된 비음수 Int64 시퀀스를 두 가지 청크 방식으로 압축:
@@ -38,7 +38,7 @@ public static class SortedSetInteger
 	/// <param name="sorted">인코딩할 정렬된 집합 (중복 없음, 비음수)</param>
 	/// <param name="proto">출력 청크 구조</param>
 	/// <exception cref="ArgumentNullException">sorted가 null인 경우</exception>
-	public static void Encode(SortedSet<Int64> sorted, out PbSegmented proto)
+	public static void Encode(SortedSet<Int64> sorted, out PbSortedSetInteger proto)
 	{
 		ArgumentNullException.ThrowIfNull(sorted);
 
@@ -77,7 +77,7 @@ public static class SortedSetInteger
 	/// false로 설정 시 입력이 엄격한 오름차순이고 비음수임을 호출자가 보장해야 합니다.
 	/// </param>
 	/// <exception cref="ArgumentException">값이 음수이거나 엄격한 오름차순이 아닌 경우</exception>
-	public static void Encode(ReadOnlySpan<Int64> sorted, out PbSegmented proto,
+	public static void Encode(ReadOnlySpan<Int64> sorted, out PbSortedSetInteger proto,
 		bool useSortValidation = true)
 	{
 		proto = new();
@@ -102,7 +102,7 @@ public static class SortedSetInteger
 	/// <param name="proto">디코딩할 청크 구조</param>
 	/// <param name="integers">출력 정렬된 집합</param>
 	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
-	public static void Decode(PbSegmented proto, out SortedSet<Int64> integers)
+	public static void Decode(PbSortedSetInteger proto, out SortedSet<Int64> integers)
 	{
 		ArgumentNullException.ThrowIfNull(proto);
 		integers = [];
@@ -145,7 +145,7 @@ public static class SortedSetInteger
 		}
 	}
 
-	private static void EncodeCore(ReadOnlySpan<Int64> sorted, PbSegmented proto)
+	private static void EncodeCore(ReadOnlySpan<Int64> sorted, PbSortedSetInteger proto)
 	{
 		if (sorted.Length == 1)
 		{
@@ -183,15 +183,12 @@ public static class SortedSetInteger
 		context.Flush(proto);
 	}
 
-	/// <summary>
-	/// 인접 값의 간격으로 모드를 결정하고, 모드 전환 시 기존 청크를 플러시합니다.
-	/// </summary>
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private static void ProcessValue(
 		ref EncodingContext context,
 		Int64 current,
 		Int64 next,
-		PbSegmented proto)
+		PbSortedSetInteger proto)
 	{
 		// gap < BitmapChunkMax(64)이면 비트맵 방식, 이상이면 증분 리스트 방식
 		Mode desired = (next - current) < BitmapChunkMax ? Mode.Bitmap : Mode.Increment;
@@ -213,7 +210,6 @@ public static class SortedSetInteger
 		}
 	}
 
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private static void DecodeBitmap(PbBitmapChunk chunk, SortedSet<Int64> set)
 	{
 		Int64 start = chunk.Start;
@@ -249,7 +245,6 @@ public static class SortedSetInteger
 		}
 	}
 
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private static void DecodeIncrement(PbIncrementChunk chunk, SortedSet<Int64> set)
 	{
 		Int64 start = chunk.Start;
@@ -297,7 +292,7 @@ public static class SortedSetInteger
 			};
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public void Flush(PbSegmented output)
+		public void Flush(PbSortedSetInteger output)
 		{
 			if (Mode == Mode.Bitmap) _bitmap.Flush(output);
 			else if (Mode == Mode.Increment) _increment.Flush(output);
@@ -338,7 +333,7 @@ public static class SortedSetInteger
 			=> (nextValue - _start) >= BitmapChunkMax;
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public void Flush(PbSegmented output)
+		public void Flush(PbSortedSetInteger output)
 		{
 			PbBitmapChunk chunk = new()
 			{
@@ -402,7 +397,7 @@ public static class SortedSetInteger
 			=> (nextValue - _start) >= IncrementChunkMax;
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public void Flush(PbSegmented output)
+		public void Flush(PbSortedSetInteger output)
 		{
 			output.Chunks.Add(new PbChunk
 			{
