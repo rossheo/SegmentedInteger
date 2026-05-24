@@ -32,11 +32,11 @@ public class ElapseWriter : IDisposable
 
         if (string.IsNullOrEmpty(_name))
         {
-            _writer.WriteLine($"elapse end: {elapsed:hh\\:mm\\:ss\\.fff}");
+            _writer.WriteLine($"elapse end: {elapsed:hh\\:mm\\:ss\\.fff}_{elapsed.Microseconds:D3}");
         }
         else
         {
-            _writer.WriteLine($"elapse end: {_name}, {elapsed:hh\\:mm\\:ss\\.fff}");
+            _writer.WriteLine($"elapse end: {_name}, {elapsed:hh\\:mm\\:ss\\.fff}_{elapsed.Microseconds:D3}");
         }
     }
 }

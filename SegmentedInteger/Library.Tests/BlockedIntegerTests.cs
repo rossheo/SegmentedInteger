@@ -1,5 +1,6 @@
 using CsvHelper;
 using CsvHelper.Configuration;
+using Library.Disposables;
 using Library.SegmentedIntegers;
 using System.Globalization;
 
@@ -9,8 +10,14 @@ public class BlockedIntegerTests
 {
 	private static async Task AssertRoundTrip(Int64[] input)
 	{
-		BlockedInteger.Encode(input.AsSpan(), out var proto);
-		BlockedInteger.Decode(proto, out var result);
+		Pb.BlockedInteger proto;
+		IReadOnlyList<Int64> result;
+
+		using (ElapseWriter elapse = new(TestContext.Current!.OutputWriter, disableStartLogging: true))
+		{
+			BlockedInteger.Encode(input.AsSpan(), out proto);
+			BlockedInteger.Decode(proto, out result);
+		}
 
 		await TestContext.Current!.OutputWriter.WriteLineAsync(
 			$"IntSize: {input.Length * sizeof(Int64):N0}, pbSize: {proto.CalculateSize():N0}");
@@ -374,8 +381,14 @@ public class BlockedIntegerTests
 			}
 		}
 
-		BlockedInteger.Encode(input, out var proto);
-		BlockedInteger.Decode(proto, out var result);
+		Pb.BlockedInteger proto;
+		IReadOnlyList<Int64> result;
+
+		using (ElapseWriter elapse = new(TestContext.Current!.OutputWriter, disableStartLogging: true))
+		{
+			BlockedInteger.Encode(input, out proto);
+			BlockedInteger.Decode(proto, out result);
+		}
 
 		Int32 intSize = input.Count * sizeof(Int64);
 		Int32 pbSize = proto.CalculateSize();
