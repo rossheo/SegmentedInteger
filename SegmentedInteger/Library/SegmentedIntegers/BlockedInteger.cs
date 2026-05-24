@@ -7,10 +7,10 @@ using PbBlockedInteger = Pb.BlockedInteger;
 using PbBlock = Pb.BlockedInteger.Types.Block;
 using PbConstantBlock = Pb.BlockedInteger.Types.Block.Types.ConstantBlock;
 using PbArithmeticBlock = Pb.BlockedInteger.Types.Block.Types.ArithmeticBlock;
-using PbAscendingBlock = Pb.BlockedInteger.Types.Block.Types.AscendingBlock;
 using PbAscendingBitmapBlock = Pb.BlockedInteger.Types.Block.Types.AscendingBitmapBlock;
-using PbDescendingBlock = Pb.BlockedInteger.Types.Block.Types.DescendingBlock;
+using PbAscendingBlock = Pb.BlockedInteger.Types.Block.Types.AscendingBlock;
 using PbDescendingBitmapBlock = Pb.BlockedInteger.Types.Block.Types.DescendingBitmapBlock;
+using PbDescendingBlock = Pb.BlockedInteger.Types.Block.Types.DescendingBlock;
 using PbDeltaBlock = Pb.BlockedInteger.Types.Block.Types.DeltaBlock;
 
 /// <summary>
@@ -98,6 +98,8 @@ public static class BlockedInteger
 				case PbBlock.BlockOneofOneofCase.Delta:
 					DecodeDelta(block.Delta, result);
 					break;
+				default:
+					throw new InvalidOperationException($"Unknown block type: {block.BlockOneofCase}");
 			}
 		}
 		integers = result;
