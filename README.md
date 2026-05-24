@@ -74,10 +74,26 @@ SortedSetInteger.Decode(proto, out var decoded);
 
 하나의 시퀀스는 여러 블록으로 분할될 수 있습니다. 각 블록은 독립적으로 위 우선순위를 적용합니다.
 
+> **블록당 값 수 상한 (8,192개)**  
+> 단일 블록이 수용할 수 있는 최대 값은 8,192개입니다. 시퀀스가 이를 초과하면 자동으로 새 블록을 시작합니다.
+
+> **ConstantBlock·ArithmeticBlock 최소 count (3)**  
+> 패턴이 일치해도 count < 3이면 해당 블록을 선택하지 않고 다음 우선순위로 넘어갑니다.  
+> 예: `[5, 5]`는 ConstantBlock 조건(`count ≥ 3`)을 만족하지 않아 AscendingBlock으로 처리됩니다.
+
+> **DeltaBlock 강제 분리 조건**  
+> 오름차순·내림차순 단조성이 동시에 깨지고 범위(`max − min`)가 16,382를 초과하면  
+> 현재 블록을 종료하고 새 블록을 시작합니다.
+
 > **BitmapBlock 임계값 근거 (count ≥ 10)**  
 > - AscendingBlock: `tag(1B) + len(1B) + (N−1) × 1B = N+1 bytes`  
 > - AscendingBitmapBlock: `tag(1B) + uint64 varint(최대 9B) = 최대 10B`  
 > - N ≥ 10일 때 비트맵이 항상 이기거나 동률
+
+> **BitmapBlock과 중복값**  
+> 비트맵은 각 비트 위치가 값의 존재 여부를 나타내므로, 같은 값을 두 번 표현할 수 없습니다.  
+> range ≤ 63, count ≥ 10을 만족하더라도 중복값이 있으면 strictly 조건(`_isStrictlyAscending` / `_isStrictlyDescending`)이 false가 되어  
+> `AscendingBitmapBlock` → `AscendingBlock`, `DescendingBitmapBlock` → `DescendingBlock`으로 각각 fallback됩니다.
 
 ### API
 
