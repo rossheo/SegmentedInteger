@@ -7,17 +7,17 @@ using System.Globalization;
 
 namespace Library.Tests;
 
-public class SegmentedIntegerTests
+public class SortedSetIntegerTests
 {
     private static async Task AssertRoundTrip(SortedSet<Int64> testSet)
     {
-        Pb.SegmentedInteger converted;
+        Pb.SortedSetInteger converted;
         SortedSet<Int64> results;
 
         using (ElapseWriter elapse = new(TestContext.Current!.OutputWriter, disableStartLogging: true))
         {
-            SegmentedInteger.Encode(testSet, out converted);
-            SegmentedInteger.Decode(converted, out results);
+            SortedSetInteger.Encode(testSet, out converted);
+            SortedSetInteger.Decode(converted, out results);
         }
 
         await TestContext.Current!.OutputWriter.WriteLineAsync(
@@ -125,21 +125,21 @@ public class SegmentedIntegerTests
     [Test]
     public async Task TwoElementsAdjacentTest()
     {
-        // gap = 1 < 64 → Segment64 mode
+        // gap = 1 < 64 → BitmapChunk mode
         await AssertRoundTrip([0L, 1L]);
     }
 
     [Test]
     public async Task TwoElementsLargeGapTest()
     {
-        // gap > Segment2MMax (2,000,000) → each value becomes its own segment
+        // gap > IncrementChunkMax (2,000,000) → each value becomes its own segment
         await AssertRoundTrip([0L, 5_000_000L]);
     }
 
     [Test]
-    public async Task Segment64ExactlyFullTest()
+    public async Task BitmapChunkExactlyFullTest()
     {
-        // 64 sequential values (0-63): fills one Segment64 with Filled=true
+        // 64 sequential values (0-63): fills one BitmapChunk with Filled=true
         SortedSet<Int64> testSet = [];
         for (Int64 i = 0; i < 64; ++i) testSet.Add(i);
 
@@ -147,9 +147,9 @@ public class SegmentedIntegerTests
     }
 
     [Test]
-    public async Task Segment64PlusOneTest()
+    public async Task BitmapChunkPlusOneTest()
     {
-        // 65 sequential values (0-64): one full Segment64 + overflow into next segment
+        // 65 sequential values (0-64): one full BitmapChunk + overflow into next segment
         SortedSet<Int64> testSet = [];
         for (Int64 i = 0; i < 65; ++i) testSet.Add(i);
 
@@ -169,7 +169,7 @@ public class SegmentedIntegerTests
     [Test]
     public async Task SparseValuesTest()
     {
-        // gap = 1,000 (>= 64, < 2,000,000) → Segment2M mode
+        // gap = 1,000 (>= 64, < 2,000,000) → IncrementChunk mode
         SortedSet<Int64> testSet = [];
         for (Int64 i = 0; i < 100; ++i) testSet.Add(i * 1_000L);
 
@@ -179,20 +179,20 @@ public class SegmentedIntegerTests
     [Test]
     public async Task VeryLargeGapTest()
     {
-        // gap = 3,000,000 > Segment2MMax (2,000,000) → each value in its own segment
+        // gap = 3,000,000 > IncrementChunkMax (2,000,000) → each value in its own segment
         await AssertRoundTrip([0L, 3_000_000L, 6_000_000L, 9_000_000L]);
     }
 
     [Test]
     public async Task MixedModeTest()
     {
-        // S64 (dense, gap < 64) → S2M (sparse, gap >= 64) → S64 again
+        // Bitmap (dense, gap < 64) → Increment (sparse, gap >= 64) → Bitmap again
         SortedSet<Int64> testSet = [];
-        for (Int64 i = 0; i < 10; ++i) testSet.Add(i);           // 0-9:   S64
-        for (Int64 i = 1; i <= 3; ++i) testSet.Add(i * 10_000L); // 10000, 20000, 30000: S2M
+        for (Int64 i = 0; i < 10; ++i) testSet.Add(i);           // 0-9:   Bitmap
+        for (Int64 i = 1; i <= 3; ++i) testSet.Add(i * 10_000L); // 10000, 20000, 30000: Increment
         testSet.Add(30_001L);
         testSet.Add(30_002L);
-        testSet.Add(30_003L);                                      // 30001-30003: S64
+        testSet.Add(30_003L);                                      // 30001-30003: Bitmap
 
         await AssertRoundTrip(testSet);
     }
@@ -203,7 +203,7 @@ public class SegmentedIntegerTests
         await Assert.That(() =>
         {
             SortedSet<Int64>? nullSet = null;
-            SegmentedInteger.Encode(nullSet!, out _);
+            SortedSetInteger.Encode(nullSet!, out _);
         }).Throws<ArgumentNullException>();
     }
 
@@ -212,7 +212,7 @@ public class SegmentedIntegerTests
     {
         await Assert.That(() =>
         {
-            SegmentedInteger.Decode(null!, out _);
+            SortedSetInteger.Decode(null!, out _);
         }).Throws<ArgumentNullException>();
     }
 
@@ -223,7 +223,7 @@ public class SegmentedIntegerTests
         static void Invoke()
         {
             Int64[] arr = [-1L, 0L, 1L];
-            SegmentedInteger.Encode(arr.AsSpan(), out _);
+            SortedSetInteger.Encode(arr.AsSpan(), out _);
         }
 
         await Assert.That(Invoke).Throws<ArgumentException>();
@@ -236,7 +236,7 @@ public class SegmentedIntegerTests
         static void Invoke()
         {
             Int64[] arr = [5L, 3L, 8L];
-            SegmentedInteger.Encode(arr.AsSpan(), out _);
+            SortedSetInteger.Encode(arr.AsSpan(), out _);
         }
 
         await Assert.That(Invoke).Throws<ArgumentException>();
@@ -248,30 +248,30 @@ public class SegmentedIntegerTests
     [Test]
     public async Task ByteSnapshot_EmptyTest()
     {
-        SegmentedInteger.Encode([], out var proto);
+        SortedSetInteger.Encode([], out var proto);
         await Assert.That(proto.ToByteArray().Length).IsEqualTo(0);
     }
 
     [Test]
-    public async Task ByteSnapshot_Seg64FilledTest()
+    public async Task ByteSnapshot_BitmapFilledTest()
     {
-        // [0..63]: Segment64(Start=0, Filled=true) 단일 세그먼트
+        // [0..63]: BitmapChunk(Start=0, Filled=true) 단일 세그먼트
         SortedSet<Int64> set = [];
         for (Int64 i = 0; i < 64; ++i) set.Add(i);
 
-        SegmentedInteger.Encode(set, out var proto);
+        SortedSetInteger.Encode(set, out var proto);
         await Assert.That(Convert.ToHexString(proto.ToByteArray()))
             .IsEqualTo("0A060A0408001801");
     }
 
     [Test]
-    public async Task ByteSnapshot_Seg64FilledPlusOneSeg2MTest()
+    public async Task ByteSnapshot_BitmapFilledPlusIncrementTest()
     {
-        // [0..64]: Segment64(Filled=true) + Segment2M(Start=64) — NEW canonical 형식
+        // [0..64]: BitmapChunk(Filled=true) + IncrementChunk(Start=64) — NEW canonical 형식
         SortedSet<Int64> set = [];
         for (Int64 i = 0; i < 65; ++i) set.Add(i);
 
-        SegmentedInteger.Encode(set, out var proto);
+        SortedSetInteger.Encode(set, out var proto);
         await Assert.That(Convert.ToHexString(proto.ToByteArray()))
             .IsEqualTo("0A060A04080018010A0412020840");
     }
@@ -279,13 +279,13 @@ public class SegmentedIntegerTests
     [Test]
     public async Task ByteSnapshot_MixedModeTest()
     {
-        // S64(0..9) + S2M(9,10000,20000) + S64(30000..30003)
+        // Bitmap(0..9) + Increment(9,10000,20000) + Bitmap(30000..30003)
         SortedSet<Int64> set = [];
         for (Int64 i = 0; i < 10; ++i) set.Add(i);
         for (Int64 i = 1; i <= 3; ++i) set.Add(i * 10_000L);
         set.Add(30_001L); set.Add(30_002L); set.Add(30_003L);
 
-        SegmentedInteger.Encode(set, out var proto);
+        SortedSetInteger.Encode(set, out var proto);
         await Assert.That(Convert.ToHexString(proto.ToByteArray()))
             .IsEqualTo("0A070A0508001201FF0A0B120908091205874E979C010A090A0708B0EA01120107");
     }
@@ -297,8 +297,8 @@ public class SegmentedIntegerTests
         SortedSet<Int64> set = [0, 1, 100, 200];
         Int64[] arr = [0, 1, 100, 200];
 
-        SegmentedInteger.Encode(set, out var proto1);
-        SegmentedInteger.Encode(arr.AsSpan(), out var proto2);
+        SortedSetInteger.Encode(set, out var proto1);
+        SortedSetInteger.Encode(arr.AsSpan(), out var proto2);
 
         await Assert.That(Convert.ToHexString(proto1.ToByteArray()))
             .IsEqualTo(Convert.ToHexString(proto2.ToByteArray()));

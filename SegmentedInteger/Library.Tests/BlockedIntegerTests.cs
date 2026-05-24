@@ -604,4 +604,139 @@ public class BlockedIntegerTests
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.DescendingBitmap);
 		await AssertRoundTrip(input);
 	}
+
+	// ─── DeltaBlock ───
+
+	[Test]
+	public async Task DeltaBlock_ReferenceCalculation_Symmetric()
+	{
+		// min=0, max=10 → reference=5
+		// deltas: 0-5=-5, 10-5=5, 3-5=-2
+		Int64[] input = [0, 10, 3];
+		BlockedInteger.Encode(input, out var proto);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
+		await Assert.That(proto.Blocks[0].Delta.Reference).IsEqualTo(5L);
+		await AssertRoundTrip(input);
+	}
+
+	[Test]
+	public async Task DeltaBlock_NegativeValues_RoundTrip()
+	{
+		// 음수만 포함하는 비정렬 시퀀스
+		Int64[] input = [-100, -50, -75];
+		BlockedInteger.Encode(input, out var proto);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
+		await AssertRoundTrip(input);
+	}
+
+	[Test]
+	public async Task DeltaBlock_PositiveNegativeMixed_RoundTrip()
+	{
+		// 양수와 음수 혼합
+		Int64[] input = [-10, 20, 5, -5];
+		BlockedInteger.Encode(input, out var proto);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
+		await AssertRoundTrip(input);
+	}
+
+	[Test]
+	public async Task DeltaBlock_MaxRange_16382()
+	{
+		// range=16382 (최대 범위)
+		Int64[] input = [0, 16382, 5000];
+		BlockedInteger.Encode(input, out var proto);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
+		await AssertRoundTrip(input);
+	}
+
+	[Test]
+	public async Task DeltaBlock_Duplicates_RoundTrip()
+	{
+		// 중복 포함 비정렬
+		Int64[] input = [10, 5, 10, 3, 5];
+		BlockedInteger.Encode(input, out var proto);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
+		await AssertRoundTrip(input);
+	}
+
+	[Test]
+	public async Task DeltaBlock_LargeValueSpread_RoundTrip()
+	{
+		// min=-1000, max=5000, range=6000
+		Int64[] input = [-1000, 5000, 0, 2000, -500];
+		BlockedInteger.Encode(input, out var proto);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
+		await AssertRoundTrip(input);
+	}
+
+	[Test]
+	public async Task DeltaBlock_ReferenceAtExtremes()
+	{
+		// reference가 Int64 극값 근처
+		Int64[] input = [Int64.MaxValue - 100, Int64.MaxValue - 50, Int64.MaxValue - 75];
+		BlockedInteger.Encode(input, out var proto);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
+		await AssertRoundTrip(input);
+	}
+
+	[Test]
+	public async Task DeltaBlock_ZeroCrossing()
+	{
+		// 음수에서 양수로 혼합
+		Int64[] input = [-100, 100, 0];
+		BlockedInteger.Encode(input, out var proto);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
+		await AssertRoundTrip(input);
+	}
+
+	[Test]
+	public async Task DeltaBlock_OscillatingValues_RoundTrip()
+	{
+		// 진동하는 값
+		Int64[] input = [0, 100, 10, 90, 20];
+		BlockedInteger.Encode(input, out var proto);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
+		await AssertRoundTrip(input);
+	}
+
+	// ─── 블록 선택 우선순위 ───
+
+	[Test]
+	public async Task BlockSelection_TwoElementDecreasing_UsesDescendingBlock()
+	{
+		// 2원소 감소 시퀀스 — count < RepeatableBlockMinCount이므로 DeltaBlock 불가, DescendingBlock 선택
+		Int64[] input = [100, 50];
+		BlockedInteger.Encode(input, out var proto);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Descending);
+		await AssertRoundTrip(input);
+	}
+
+	[Test]
+	public async Task BlockSelection_AllEqualValues_UsesConstantBlock()
+	{
+		// 모든 값 동일 → ConstantBlock이 DeltaBlock보다 우선
+		BlockedInteger.Encode([0L, 0L, 0L], out var proto);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Constant);
+	}
+
+	[Test]
+	public async Task BlockSelection_SingleValue_UsesAscendingBlock()
+	{
+		// 단일 값 → AscendingBlock (diff 0개)
+		BlockedInteger.Encode([42L], out var proto);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
+		await AssertRoundTrip([42L]);
+	}
 }

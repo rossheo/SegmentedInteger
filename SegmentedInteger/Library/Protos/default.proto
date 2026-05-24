@@ -2,16 +2,16 @@ syntax = "proto3";
 
 package pb;
 
-message SegmentedInteger
+message SortedSetInteger
 {
-	message Segment
+	message Chunk
 	{
-		message Segment64
+		message BitmapChunk
 		{
-			enum SegmentLimit
+			enum ChunkLimit
 			{
-				SegmentLimit_None = 0;
-				SegmentLimit_Max = 64;
+				ChunkLimit_None = 0;
+				ChunkLimit_Max = 64;
 			};
 
 			optional int64 start = 1;
@@ -19,26 +19,26 @@ message SegmentedInteger
 			bool filled = 3;			// true인 경우 구간 전체 채움 (bit_increments 삭제)
 		}
 
-		message Segment2M
+		message IncrementChunk
 		{
-			enum SegmentLimit
+			enum ChunkLimit
 			{
-				SegmentLimit_None = 0;
-				SegmentLimit_Max = 2000000;
+				ChunkLimit_None = 0;
+				ChunkLimit_Max = 2000000;
 			};
 
 			optional int64 start = 1;
 			repeated int64 increments = 2;	// start 값으로부터의 증가분 리스트 (1 ~ 1,999,999)
 		}
 
-		oneof segments_oneof
+		oneof chunks_oneof
 		{
-			Segment64 segment64 = 1;
-			Segment2M segment2M = 2;
+			BitmapChunk bitmap_chunk = 1;
+			IncrementChunk increment_chunk = 2;
 		}
 	}
 
-	repeated Segment segments = 1;
+	repeated Chunk chunks = 1;
 }
 
 message BlockedInteger
@@ -50,6 +50,20 @@ message BlockedInteger
 			sint64 value = 1;
 			int32 count = 2;
 		}
+
+		message ArithmeticBlock
+		{
+			sint64 first = 1;
+			sint64 step = 2;
+			int32 count = 3;
+		}
+
+		message AscendingBitmapBlock
+		{
+			sint64 first = 1;
+			uint64 bits = 2;	// bit i(0-indexed, 0~62) 세트 → first+i+1 값 존재
+		}
+
 		message AscendingBlock
 		{
 			enum DiffsLimit
@@ -60,6 +74,13 @@ message BlockedInteger
 			sint64 first = 1;
 			repeated uint64 diffs = 2;	// 오름차순: next - prev (양수)
 		}
+
+		message DescendingBitmapBlock
+		{
+			sint64 first = 1;
+			uint64 bits = 2;	// bit i(0-indexed, 0~62) 세트 → first-i-1 값 존재
+		}
+
 		message DescendingBlock
 		{
 			enum DiffsLimit
@@ -70,12 +91,7 @@ message BlockedInteger
 			sint64 first = 1;
 			repeated uint64 diffs = 2;	// 내림차순: prev - next (양수)
 		}
-		message ArithmeticBlock
-		{
-			sint64 first = 1;
-			sint64 step = 2;
-			int32 count = 3;
-		}
+
 		message DeltaBlock
 		{
 			enum RangeLimit
@@ -86,26 +102,18 @@ message BlockedInteger
 			sint64 reference = 1;
 			repeated sint64 deltas = 2;
 		}
-		message AscendingBitmapBlock
-		{
-			sint64 first = 1;
-			uint64 bits = 2;	// bit i(0-indexed, 0~62) 세트 → first+i+1 값 존재
-		}
-		message DescendingBitmapBlock
-		{
-			sint64 first = 1;
-			uint64 bits = 2;	// bit i(0-indexed, 0~62) 세트 → first-i-1 값 존재
-		}
+
 		oneof block_oneof
 		{
 			ConstantBlock constant = 1;
 			ArithmeticBlock arithmetic = 2;
-			AscendingBlock ascending = 3;
-			AscendingBitmapBlock ascending_bitmap = 4;
-			DeltaBlock delta = 5;
+			AscendingBitmapBlock ascending_bitmap = 3;
+			AscendingBlock ascending = 4;
+			DescendingBitmapBlock descending_bitmap = 5;
 			DescendingBlock descending = 6;
-			DescendingBitmapBlock descending_bitmap = 7;
+			DeltaBlock delta = 7;
 		}
 	}
+
 	repeated Block blocks = 1;
 }

@@ -1,0 +1,11 @@
+<Project>
+  <!--
+    microsoft.testing.platform.msbuild 2.2.3의 _MTPBeforeVSTest 버그 우회:
+    .NET 10 SDK에서 TestingPlatformDotnetTestSupport=true 여부와 무관하게
+    IsTestingPlatformApplication=true이면 오류를 발생시키는 결함이 있음.
+    BuildProject 호출은 유지하되 잘못된 오류 조건을 제거함.
+  -->
+  <Target Name="_MTPBeforeVSTest" BeforeTargets="VSTest">
+    <CallTarget Condition="'$(VSTestNoBuild)' != 'true' AND '$(TargetFramework)'!=''" Targets="BuildProject" />
+  </Target>
+</Project>

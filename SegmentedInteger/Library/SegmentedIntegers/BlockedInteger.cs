@@ -52,8 +52,17 @@ public static class BlockedInteger
 	public static void Encode(IEnumerable<Int64> values, out PbBlockedInteger proto)
 	{
 		ArgumentNullException.ThrowIfNull(values);
-		Int64[] arr = values.ToArray();
-		Encode(arr.AsSpan(), out proto);
+		proto = new();
+		BlockAccumulator acc = new();
+		foreach (Int64 v in values)
+		{
+			if (!acc.TryAdd(v))
+			{
+				acc.Flush(proto);
+				acc.TryAdd(v);
+			}
+		}
+		acc.Flush(proto);
 	}
 
 	/// <summary>
@@ -96,8 +105,7 @@ public static class BlockedInteger
 
 	private static void EncodeCore(ReadOnlySpan<Int64> values, PbBlockedInteger proto)
 	{
-		BlockAccumulator acc = default;
-		acc.Init();
+		BlockAccumulator acc = new();
 		foreach (Int64 v in values)
 		{
 			if (!acc.TryAdd(v))
@@ -173,6 +181,7 @@ public static class BlockedInteger
 		return new() { Delta = block };
 	}
 
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private static UInt64 BuildAscendingBitmapBits(List<Int64> buffer, Int64 first)
 	{
 		UInt64 bits = 0UL;
@@ -181,6 +190,7 @@ public static class BlockedInteger
 		return bits;
 	}
 
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private static UInt64 BuildDescendingBitmapBits(List<Int64> buffer, Int64 first)
 	{
 		UInt64 bits = 0UL;
@@ -189,14 +199,12 @@ public static class BlockedInteger
 		return bits;
 	}
 
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private static void DecodeConstant(PbConstantBlock block, List<Int64> output)
 	{
 		for (Int32 i = 0; i < block.Count; ++i)
 			output.Add(block.Value);
 	}
 
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private static void DecodeArithmetic(PbArithmeticBlock block, List<Int64> output)
 	{
 		Int64 current = block.First;
@@ -207,7 +215,6 @@ public static class BlockedInteger
 		}
 	}
 
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private static void DecodeAscendingBitmap(PbAscendingBitmapBlock block, List<Int64> output)
 	{
 		Int64 first = block.First;
@@ -221,7 +228,6 @@ public static class BlockedInteger
 		}
 	}
 
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private static void DecodeAscending(PbAscendingBlock block, List<Int64> output)
 	{
 		Int64 current = block.First;
@@ -233,7 +239,6 @@ public static class BlockedInteger
 		}
 	}
 
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private static void DecodeDescendingBitmap(PbDescendingBitmapBlock block, List<Int64> output)
 	{
 		Int64 first = block.First;
@@ -247,7 +252,6 @@ public static class BlockedInteger
 		}
 	}
 
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private static void DecodeDescending(PbDescendingBlock block, List<Int64> output)
 	{
 		Int64 current = block.First;
@@ -259,19 +263,19 @@ public static class BlockedInteger
 		}
 	}
 
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private static void DecodeDelta(PbDeltaBlock block, List<Int64> output)
 	{
 		Int32 before = output.Count;
 		foreach (Int64 delta in block.Deltas)
 			output.Add(block.Reference + delta);
+		// 외부 proto에서 Deltas가 비어 있을 경우 reference 값으로 폴백
 		if (output.Count == before) output.Add(block.Reference);
 	}
 
-	// 상태 머신: default + Init() 패턴
+	// default(BlockAccumulator) 금지 — readonly _buffer 필드 초기자가 실행되지 않아 NullReferenceException 발생
 	private struct BlockAccumulator
 	{
-		private List<Int64>? _buffer;
+		private readonly List<Int64> _buffer = new();
 		private Int64 _min;
 		private Int64 _max;
 		private Int64 _prev;
@@ -283,15 +287,11 @@ public static class BlockedInteger
 		private bool _isStrictlyAscending;
 		private bool _isStrictlyDescending;
 
-		public void Init()
-		{
-			_buffer ??= new List<Int64>();
-			Reset();
-		}
+		public BlockAccumulator() => Reset();
 
 		private void Reset()
 		{
-			_buffer!.Clear();
+			_buffer.Clear();
 			_min = Int64.MaxValue;
 			_max = Int64.MinValue;
 			_isAscending = true;
@@ -305,7 +305,7 @@ public static class BlockedInteger
 
 		public bool TryAdd(Int64 value)
 		{
-			if (_buffer!.Count >= MaxBlockValues) return false;
+			if (_buffer.Count >= MaxBlockValues) return false;
 
 			Int64 newMin = Math.Min(_min, value);
 			Int64 newMax = Math.Max(_max, value);
@@ -346,7 +346,7 @@ public static class BlockedInteger
 
 		public void Flush(PbBlockedInteger proto)
 		{
-			if (_buffer is null || _buffer.Count == 0) return;
+			if (_buffer.Count == 0) return;
 
 			if (_isConstant && _buffer.Count >= RepeatableBlockMinCount)
 				proto.Blocks.Add(EncodeConstant(_buffer));
