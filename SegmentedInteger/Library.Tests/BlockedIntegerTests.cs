@@ -46,7 +46,7 @@ public class BlockedIntegerTests
 	[Test]
 	public async Task BasicRoundTrip_PreservesOrderAndDuplicates()
 	{
-		await AssertRoundTrip([10, 5, 20, 3]);
+		await AssertRoundTrip([10, 5, 20, 3, 8, 15, 2, 12, 7, 18, 10, 5, 3, 17, 1, 14, 9, 6, 11, 4]);
 	}
 
 	[Test]
@@ -67,12 +67,14 @@ public class BlockedIntegerTests
 	[Test]
 	public async Task ConstantBlock_TypeAndRoundTrip()
 	{
-		BlockedInteger.Encode([7, 7, 7], out var proto);
+		Int64[] input = new Int64[20];
+		Array.Fill(input, 7L);
+		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].Constant.Value).IsEqualTo(7L);
-		await Assert.That(proto.Blocks[0].Constant.Count).IsEqualTo(3);
-		await Assert.That(result).IsEquivalentTo(new List<Int64> { 7, 7, 7 });
+		await Assert.That(proto.Blocks[0].Constant.Count).IsEqualTo(20);
+		await Assert.That(result).IsEquivalentTo(input.ToList());
 	}
 
 	[Test]
@@ -90,18 +92,24 @@ public class BlockedIntegerTests
 	[Test]
 	public async Task ArithmeticBlock_Descending()
 	{
-		BlockedInteger.Encode([100, 90, 80, 70], out var proto);
+		// step=-10, 20개: 100, 90, ..., -90
+		Int64[] input = new Int64[20];
+		for (Int32 i = 0; i < input.Length; ++i) input[i] = 100 - i * 10L;
+		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].Arithmetic.Step).IsEqualTo(-10L);
-		await Assert.That(result).IsEquivalentTo(new List<Int64> { 100, 90, 80, 70 });
+		await Assert.That(proto.Blocks[0].Arithmetic.Count).IsEqualTo(20);
+		await Assert.That(result).IsEquivalentTo(input.ToList());
 	}
 
 	[Test]
 	public async Task ArithmeticBlock_StepZeroIsConstant()
 	{
 		// step=0 등차 수열은 ConstantBlock이 우선
-		BlockedInteger.Encode([5, 5, 5], out var proto);
+		Int64[] input = new Int64[20];
+		Array.Fill(input, 5L);
+		BlockedInteger.Encode(input, out var proto);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Constant);
 	}
@@ -109,38 +117,44 @@ public class BlockedIntegerTests
 	[Test]
 	public async Task AscendingBlock_NonArithmeticAscending()
 	{
-		// 비-등차 단조증가 → AscendingBlock
-		BlockedInteger.Encode([0, 50, 100, 200], out var proto);
+		// 비-등차 단조증가(삼각수) → AscendingBlock (range=190>63이므로 Bitmap 아님)
+		// diff: 1,2,3,...,19 — 등차수열이 아님
+		Int64[] input = new Int64[20];
+		for (Int32 i = 0; i < input.Length; ++i) input[i] = i * (i + 1) / 2; // 0,1,3,6,10,...
+		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
-		await Assert.That((Int64)proto.Blocks[0].Ascending.Diffs[0]).IsEqualTo(50L);
-		await Assert.That((Int64)proto.Blocks[0].Ascending.Diffs[1]).IsEqualTo(50L);
-		await Assert.That((Int64)proto.Blocks[0].Ascending.Diffs[2]).IsEqualTo(100L);
-		await Assert.That(result).IsEquivalentTo(new List<Int64> { 0, 50, 100, 200 });
+		await Assert.That((Int64)proto.Blocks[0].Ascending.Diffs[0]).IsEqualTo(1L);
+		await Assert.That((Int64)proto.Blocks[0].Ascending.Diffs[1]).IsEqualTo(2L);
+		await Assert.That((Int64)proto.Blocks[0].Ascending.Diffs[2]).IsEqualTo(3L);
+		await Assert.That(result).IsEquivalentTo(input.ToList());
 	}
 
 	[Test]
 	public async Task DescendingBlock_NonArithmeticDescending()
 	{
-		// 비-등차 단조감소 → DescendingBlock
-		BlockedInteger.Encode([200, 100, 50, 0], out var proto);
+		// 비-등차 단조감소(삼각수 역순) → DescendingBlock (range=190>63이므로 Bitmap 아님)
+		// diff: 19,18,17,...,1 — 등차수열이 아님
+		Int64[] input = new Int64[20];
+		for (Int32 i = 0; i < input.Length; ++i) input[i] = (19 - i) * (20 - i) / 2; // 190,171,...,0
+		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Descending);
-		await Assert.That((Int64)proto.Blocks[0].Descending.Diffs[0]).IsEqualTo(100L);
-		await Assert.That((Int64)proto.Blocks[0].Descending.Diffs[1]).IsEqualTo(50L);
-		await Assert.That((Int64)proto.Blocks[0].Descending.Diffs[2]).IsEqualTo(50L);
-		await Assert.That(result).IsEquivalentTo(new List<Int64> { 200, 100, 50, 0 });
+		await Assert.That((Int64)proto.Blocks[0].Descending.Diffs[0]).IsEqualTo(19L);
+		await Assert.That((Int64)proto.Blocks[0].Descending.Diffs[1]).IsEqualTo(18L);
+		await Assert.That((Int64)proto.Blocks[0].Descending.Diffs[2]).IsEqualTo(17L);
+		await Assert.That(result).IsEquivalentTo(input.ToList());
 	}
 
 	[Test]
 	public async Task DeltaBlock_NonSortedNarrowRange()
 	{
 		// range=17, 비정렬 → DeltaBlock
-		Int64[] input = [10, 5, 20, 3];
+		Int64[] input = [10, 5, 15, 3, 7, 12, 1, 14, 8, 17, 4, 11, 6, 13, 2, 16, 9, 0, 10, 5];
 		BlockedInteger.Encode(input, out var proto);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
@@ -151,7 +165,8 @@ public class BlockedIntegerTests
 	public async Task DeltaBlock_NonSortedWiderRange()
 	{
 		// range=200, 비정렬 → DeltaBlock
-		Int64[] input = [200, 50, 100, 0];
+		Int64[] input = [200, 50, 100, 0, 150, 30, 170, 80, 120, 10,
+		                 190, 60, 140, 20, 180, 70, 110, 40, 160, 90];
 		BlockedInteger.Encode(input, out var proto);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
@@ -236,42 +251,52 @@ public class BlockedIntegerTests
 	[Test]
 	public async Task ReversedInput_RoundTrip()
 	{
-		await AssertRoundTrip([100, 50, 10]);
+		Int64[] input = new Int64[20];
+		for (Int32 i = 0; i < input.Length; ++i) input[i] = 19 - i;
+		await AssertRoundTrip(input);
 	}
 
 	[Test]
 	public async Task OscillatingInput_RoundTrip()
 	{
-		await AssertRoundTrip([0, 100, 0, 100]);
+		Int64[] input = new Int64[20];
+		for (Int32 i = 0; i < input.Length; ++i) input[i] = (i % 2 == 0) ? 0L : 100L;
+		await AssertRoundTrip(input);
 	}
 
 	[Test]
 	public async Task ContainsZero_RoundTrip()
 	{
-		await AssertRoundTrip([0, 5, 0]);
+		await AssertRoundTrip([0, 5, 0, 3, 0, 4, 0, 2, 0, 5, 0, 3, 0, 4, 0, 2, 0, 5, 0, 1]);
 	}
 
 	[Test]
 	public async Task NegativeOnly_RoundTrip()
 	{
-		await AssertRoundTrip([-5, -3, -7, -1]);
+		await AssertRoundTrip([-5, -3, -7, -1, -9, -2, -8, -4, -6, -10,
+		                       -3, -5, -7, -1, -9, -2, -8, -4, -6, -10]);
 	}
 
 	[Test]
 	public async Task NegativePositiveOscillating_RoundTrip()
 	{
-		await AssertRoundTrip([-100, 100, -50, 50]);
+		Int64[] input = new Int64[20];
+		Int64[] pattern = [-100, 100, -50, 50];
+		for (Int32 i = 0; i < input.Length; ++i) input[i] = pattern[i % pattern.Length];
+		await AssertRoundTrip(input);
 	}
 
 	[Test]
 	public async Task ZeroBoundary_ArithmeticBlock()
 	{
-		// [-1, 0, 1]: 3원소 등차(step=1) → ArithmeticBlock
-		BlockedInteger.Encode([-1L, 0L, 1L], out var proto);
+		// 20원소 등차(step=1, -10..9) → ArithmeticBlock
+		Int64[] input = new Int64[20];
+		for (Int32 i = 0; i < input.Length; ++i) input[i] = i - 10L;
+		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Arithmetic);
-		await Assert.That(result).IsEquivalentTo(new List<Int64> { -1, 0, 1 });
+		await Assert.That(result).IsEquivalentTo(input.ToList());
 	}
 
 	// ─── 경계값 ───
@@ -326,6 +351,16 @@ public class BlockedIntegerTests
 	}
 
 	// ─── 대량 입력 ───
+
+	[Test]
+	public async Task LargeSequentialTest()
+	{
+		// 10,000 elements: 순차 증가(step=1) → ArithmeticBlock 단일 블록
+		Int64[] input = new Int64[10_000];
+		for (Int64 i = 0; i < input.Length; ++i) input[i] = i;
+
+		await AssertRoundTrip(input);
+	}
 
 	[Test]
 	public async Task LargeInput_OrderAndDuplicatesPreserved()
@@ -637,7 +672,8 @@ public class BlockedIntegerTests
 	public async Task DeltaBlock_NegativeValues_RoundTrip()
 	{
 		// 음수만 포함하는 비정렬 시퀀스
-		Int64[] input = [-100, -50, -75];
+		Int64[] input = [-100, -50, -75, -80, -60, -90, -55, -70, -85, -65,
+		                 -95, -45, -55, -75, -80, -60, -90, -55, -70, -85];
 		BlockedInteger.Encode(input, out var proto);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
@@ -648,7 +684,8 @@ public class BlockedIntegerTests
 	public async Task DeltaBlock_PositiveNegativeMixed_RoundTrip()
 	{
 		// 양수와 음수 혼합
-		Int64[] input = [-10, 20, 5, -5];
+		Int64[] input = [-10, 20, 5, -5, 15, -8, 12, -3, 8, 18,
+		                 -7, 10, 2, -9, 17, 4, -6, 13, -1, 11];
 		BlockedInteger.Encode(input, out var proto);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
@@ -703,7 +740,8 @@ public class BlockedIntegerTests
 	public async Task DeltaBlock_ZeroCrossing()
 	{
 		// 음수에서 양수로 혼합
-		Int64[] input = [-100, 100, 0];
+		Int64[] input = [-100, 100, 0, -50, 80, -20, 60, -80, 40, 90,
+		                 -10, 70, -60, 30, -90, 50, -30, 10, -70, 20];
 		BlockedInteger.Encode(input, out var proto);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
@@ -738,7 +776,8 @@ public class BlockedIntegerTests
 	public async Task BlockSelection_AllEqualValues_UsesConstantBlock()
 	{
 		// 모든 값 동일 → ConstantBlock이 DeltaBlock보다 우선
-		BlockedInteger.Encode([0L, 0L, 0L], out var proto);
+		Int64[] input = new Int64[20];
+		BlockedInteger.Encode(input, out var proto);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Constant);
 	}
