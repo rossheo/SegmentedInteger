@@ -1,64 +1,23 @@
 # SegmentedInteger
 
-`Int64` 값을 패턴에 따라 Protobuf 가변 인코딩(varint)으로 직렬화하여 용량을 줄이는 C# 라이브러리.  
-등차수열·단조증가 등 반복 패턴이 많을수록, 값의 범위가 좁을수록 압축률이 높아집니다.
+`Int64` 값을 패턴에 따라 Protobuf 가변 인코딩(varint)으로 Serialize하여 용량을 줄이는 C# 라이브러리.  
 
 ---
 
 ## 클래스 개요
 
-| 클래스 | 입력 조건 | 용도 | DataType | 복잡도 |
-|---|---|---|---|---|
-| `SortedSetInteger` | 정렬된 비음수 `Int64` 집합 | 중복되지 않은 정렬된 0 포함 양수 | `SortedSet<Int64>` | 낮음 |
-| `BlockedInteger` | 임의의 `Int64` 시퀀스 | 입력 순서 보존, 중복 숫자 허용 | `IEnumerable<Int64>` | 높음 |
+| 클래스 | 입력 조건 | DataType | 복잡도 |
+|---|---|---|---|
+| `BlockedInteger` | 임의의 `Int64` 집합 (순서 보장, 중복 허용) | `IEnumerable<Int64>` | 높음 |
+| `SortedSetInteger` | 중복 없는 정렬된 0을 포함한 양수 `Int64` 집합 | `SortedSet<Int64>` | 낮음 |
 
----
-
-## SortedSetInteger
-
-정렬된 비음수 `Int64` 집합을 두 가지 청크 방식으로 압축합니다.
-
-### 청크 타입
-
-| 타입 | 선택 조건 | 저장 방식 |
-|---|---|---|
-| **BitmapChunk** | 인접 값 간격 < 64 | 시작값 + 증분 비트맵 (최대 8바이트) |
-| **IncrementChunk** | 인접 값 간격 < 2,000,000 | 시작값 + 절대 오프셋 리스트 |
-
-간격이 두 조건을 모두 초과하면 값마다 개별 `IncrementChunk`를 생성합니다.  
-`BitmapChunk`는 63개 값이 모두 채워지면 `Filled=true`로 비트맵을 생략합니다.
-
-### API
-
-```csharp
-// SortedSet 인코딩
-SortedSetInteger.Encode(SortedSet<Int64> sorted, out Pb.SortedSetInteger proto);
-
-// ReadOnlySpan 인코딩 (useSortValidation=false 시 호출자가 정렬·비음수 보장)
-SortedSetInteger.Encode(ReadOnlySpan<Int64> sorted, out Pb.SortedSetInteger proto,
-    bool useSortValidation = true);
-
-// 디코딩
-SortedSetInteger.Decode(Pb.SortedSetInteger proto, out SortedSet<Int64> integers);
-```
-
-### 사용 예
-
-```csharp
-SortedSet<Int64> values = [0, 1, 2, 5, 10_000, 10_001];
-
-SortedSetInteger.Encode(values, out var proto);
-// → BitmapChunk(0..5) + IncrementChunk(10000..10001)
-
-SortedSetInteger.Decode(proto, out var decoded);
-// → {0, 1, 2, 5, 10000, 10001}
-```
+> `SortedSetInteger` 이후에 `BlockedInteger`를 개발하여 더 범용적으로 사용할 수 있게 개선하였음.
 
 ---
 
 ## BlockedInteger
 
-임의의 `Int64` 시퀀스를 패턴 감지 방식으로 압축합니다. 순서와 중복을 보존합니다.
+임의의 `Int64` 시퀀스를 패턴 감지 방식으로 다양한 방식으로 Serialize 합니다. (순서를 보장하고 중복을 허용합니다.)
 
 ### 블록 타입 (우선순위 순)
 
@@ -116,6 +75,47 @@ BlockedInteger.Encode(values, out var proto);
 
 BlockedInteger.Decode(proto, out var decoded);
 // → [5, 5, 5, 5, 1, 2, 3, 4, 5, 100, 50, 30, 10]
+```
+---
+
+## SortedSetInteger
+
+정렬된 비음수 `Int64` 집합을 두 가지 청크 방식으로 압축합니다.
+
+### 청크 타입
+
+| 타입 | 선택 조건 | 저장 방식 |
+|---|---|---|
+| **BitmapChunk** | 인접 값 간격 < 64 | 시작값 + 증분 비트맵 (최대 8바이트) |
+| **IncrementChunk** | 인접 값 간격 < 2,000,000 | 시작값 + 절대 오프셋 리스트 |
+
+간격이 두 조건을 모두 초과하면 값마다 개별 `IncrementChunk`를 생성합니다.  
+`BitmapChunk`는 63개 값이 모두 채워지면 `Filled=true`로 비트맵을 생략합니다.
+
+### API
+
+```csharp
+// SortedSet 인코딩
+SortedSetInteger.Encode(SortedSet<Int64> sorted, out Pb.SortedSetInteger proto);
+
+// ReadOnlySpan 인코딩 (useSortValidation=false 시 호출자가 정렬·비음수 보장)
+SortedSetInteger.Encode(ReadOnlySpan<Int64> sorted, out Pb.SortedSetInteger proto,
+    bool useSortValidation = true);
+
+// 디코딩
+SortedSetInteger.Decode(Pb.SortedSetInteger proto, out SortedSet<Int64> integers);
+```
+
+### 사용 예
+
+```csharp
+SortedSet<Int64> values = [0, 1, 2, 5, 10_000, 10_001];
+
+SortedSetInteger.Encode(values, out var proto);
+// → BitmapChunk(0..5) + IncrementChunk(10000..10001)
+
+SortedSetInteger.Decode(proto, out var decoded);
+// → {0, 1, 2, 5, 10000, 10001}
 ```
 
 ---
