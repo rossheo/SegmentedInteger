@@ -350,6 +350,23 @@ public class BlockedIntegerTests
 		await Assert.That(result).IsEquivalentTo(input.ToList());
 	}
 
+	// ─── 극단값 wrap-around ───
+
+	[Test]
+	public async Task AscendingBlock_FullInt64Range_RoundTrip()
+	{
+		// diff = UInt64.MaxValue (Int64 뺄셈이 wrap하지만 unchecked로 올바른 round-trip 보장)
+		await AssertRoundTrip([Int64.MinValue, Int64.MaxValue]);
+	}
+
+	[Test]
+	public async Task ArithmeticBlock_OverflowStep_RoundTrip()
+	{
+		// step = unchecked(1 - Int64.MaxValue) = Int64.MinValue+2 (overflow wrap)
+		// [Int64.MaxValue, 1, Int64.MinValue+3]: 엄밀히 감소하는 등차 수열
+		await AssertRoundTrip([Int64.MaxValue, 1L, Int64.MinValue + 3]);
+	}
+
 	// ─── 대량 입력 ───
 
 	[Test]

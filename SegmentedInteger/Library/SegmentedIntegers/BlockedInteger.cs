@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -42,7 +43,13 @@ public static class BlockedInteger
 	{
 		proto = new();
 		if (values.Length == 0) return;
-		EncodeCore(values, proto);
+
+		BlockAccumulator acc = new();
+		foreach (Int64 value in values)
+		{
+			acc.Feed(proto, value);
+		}
+		acc.Flush(proto);
 	}
 
 	/// <summary>
@@ -53,14 +60,11 @@ public static class BlockedInteger
 	{
 		ArgumentNullException.ThrowIfNull(values);
 		proto = new();
+
 		BlockAccumulator acc = new();
-		foreach (Int64 v in values)
+		foreach (Int64 value in values)
 		{
-			if (!acc.TryAdd(v))
-			{
-				acc.Flush(proto);
-				acc.TryAdd(v);
-			}
+			acc.Feed(proto, value);
 		}
 		acc.Flush(proto);
 	}
@@ -68,11 +72,12 @@ public static class BlockedInteger
 	/// <summary>
 	/// 블록 구조를 Int64 시퀀스로 디코딩합니다. 순서와 중복을 보존합니다.
 	/// </summary>
+	/// <remarks>신뢰된 입력 전용. 외부 proto는 Count 범위 등을 검증하지 않습니다.</remarks>
 	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
 	public static void Decode(PbBlockedInteger proto, out IReadOnlyList<Int64> integers)
 	{
 		ArgumentNullException.ThrowIfNull(proto);
-		List<Int64> result = new();
+		List<Int64> result = [];
 		foreach (PbBlock block in proto.Blocks)
 		{
 			switch (block.BlockOneofCase)
@@ -105,22 +110,15 @@ public static class BlockedInteger
 		integers = result;
 	}
 
-	private static void EncodeCore(ReadOnlySpan<Int64> values, PbBlockedInteger proto)
-	{
-		BlockAccumulator acc = new();
-		foreach (Int64 v in values)
-		{
-			if (!acc.TryAdd(v))
-			{
-				acc.Flush(proto);
-				acc.TryAdd(v);
-			}
-		}
-		acc.Flush(proto);
-	}
-
 	private static PbBlock EncodeConstant(List<Int64> buffer) =>
-		new() { Constant = new PbConstantBlock { Value = buffer[0], Count = buffer.Count } };
+		new()
+		{
+			Constant = new PbConstantBlock
+			{
+				Value = buffer[0],
+				Count = buffer.Count
+			}
+		};
 
 	private static PbBlock EncodeArithmetic(List<Int64> buffer) =>
 		new()
@@ -128,7 +126,7 @@ public static class BlockedInteger
 			Arithmetic = new PbArithmeticBlock
 			{
 				First = buffer[0],
-				Step = buffer[1] - buffer[0],
+				Step = unchecked(buffer[1] - buffer[0]),
 				Count = buffer.Count
 			}
 		};
@@ -148,9 +146,11 @@ public static class BlockedInteger
 
 	private static PbBlock EncodeAscending(List<Int64> buffer)
 	{
-		var block = new PbAscendingBlock { First = buffer[0] };
+		PbAscendingBlock block = new() { First = buffer[0] };
 		for (Int32 i = 1; i < buffer.Count; ++i)
-			block.Diffs.Add((UInt64)(buffer[i] - buffer[i - 1]));
+		{
+			block.Diffs.Add(unchecked((UInt64)(buffer[i] - buffer[i - 1])));
+		}
 		return new() { Ascending = block };
 	}
 
@@ -169,17 +169,22 @@ public static class BlockedInteger
 
 	private static PbBlock EncodeDescending(List<Int64> buffer)
 	{
-		var block = new PbDescendingBlock { First = buffer[0] };
+		PbDescendingBlock block = new() { First = buffer[0] };
 		for (Int32 i = 1; i < buffer.Count; ++i)
-			block.Diffs.Add((UInt64)(buffer[i - 1] - buffer[i]));
+		{
+			block.Diffs.Add(unchecked((UInt64)(buffer[i - 1] - buffer[i])));
+		}
 		return new() { Descending = block };
 	}
 
 	private static PbBlock EncodeDelta(List<Int64> buffer, Int64 min, Int64 max)
 	{
 		Int64 reference = min + (max - min) / 2;
-		var block = new PbDeltaBlock { Reference = reference };
-		foreach (Int64 v in buffer) block.Deltas.Add(v - reference);
+		PbDeltaBlock block = new() { Reference = reference };
+		foreach (Int64 value in buffer)
+		{
+			block.Deltas.Add(value - reference);
+		}
 		return new() { Delta = block };
 	}
 
@@ -188,7 +193,9 @@ public static class BlockedInteger
 	{
 		UInt64 bits = 0UL;
 		for (Int32 i = 1; i < buffer.Count; ++i)
+		{
 			bits |= 1UL << (Int32)(buffer[i] - first - 1);
+		}
 		return bits;
 	}
 
@@ -197,14 +204,18 @@ public static class BlockedInteger
 	{
 		UInt64 bits = 0UL;
 		for (Int32 i = 1; i < buffer.Count; ++i)
+		{
 			bits |= 1UL << (Int32)(first - buffer[i] - 1);
+		}
 		return bits;
 	}
 
 	private static void DecodeConstant(PbConstantBlock block, List<Int64> output)
 	{
 		for (Int32 i = 0; i < block.Count; ++i)
+		{
 			output.Add(block.Value);
+		}
 	}
 
 	private static void DecodeArithmetic(PbArithmeticBlock block, List<Int64> output)
@@ -213,7 +224,7 @@ public static class BlockedInteger
 		for (Int32 i = 0; i < block.Count; ++i)
 		{
 			output.Add(current);
-			current += block.Step;
+			current = unchecked(current + block.Step);
 		}
 	}
 
@@ -236,7 +247,7 @@ public static class BlockedInteger
 		output.Add(current);
 		foreach (UInt64 diff in block.Diffs)
 		{
-			current += (Int64)diff;
+			current = unchecked(current + (Int64)diff);
 			output.Add(current);
 		}
 	}
@@ -260,24 +271,25 @@ public static class BlockedInteger
 		output.Add(current);
 		foreach (UInt64 diff in block.Diffs)
 		{
-			current -= (Int64)diff;
+			current = unchecked(current - (Int64)diff);
 			output.Add(current);
 		}
 	}
 
 	private static void DecodeDelta(PbDeltaBlock block, List<Int64> output)
 	{
-		Int32 before = output.Count;
+		Debug.Assert(block.Deltas.Count > 0,
+			"DeltaBlock.Deltas must not be empty; encoder never produces this state.");
+
 		foreach (Int64 delta in block.Deltas)
+		{
 			output.Add(block.Reference + delta);
-		// 외부 proto에서 Deltas가 비어 있을 경우 reference 값으로 폴백
-		if (output.Count == before) output.Add(block.Reference);
+		}
 	}
 
-	// default(BlockAccumulator) 금지 — readonly _buffer 필드 초기자가 실행되지 않아 NullReferenceException 발생
-	private struct BlockAccumulator
+	private sealed class BlockAccumulator
 	{
-		private readonly List<Int64> _buffer = new();
+		private readonly List<Int64> _buffer = [];
 		private Int64 _min;
 		private Int64 _max;
 		private Int64 _prev;
@@ -303,6 +315,9 @@ public static class BlockedInteger
 			_isStrictlyAscending = true;
 			_isStrictlyDescending = true;
 			_prevDiff = 0;
+			// _prev는 의도적으로 초기화하지 않음.
+			// TryAdd에서 _prev를 읽는 모든 코드는 _buffer.Count > 0 가드 내부에 있고,
+			// 첫 TryAdd 호출은 이 가드를 건너뛴 뒤 가드 바깥의 _prev = value로 쓴다.
 		}
 
 		public bool TryAdd(Int64 value)
@@ -320,8 +335,10 @@ public static class BlockedInteger
 				bool nextAscending = _isAscending && value >= _prev;
 				bool nextDescending = _isDescending && value <= _prev;
 				if (!nextAscending && !nextDescending &&
-					(UInt64)(newMax - newMin) > (UInt64)DeltaBlockMax)
+					unchecked((UInt64)(newMax - newMin)) > (UInt64)DeltaBlockMax)
+				{
 					return false;
+				}
 
 				if (value < _prev) _isAscending = false;
 				if (value > _prev) _isDescending = false;
@@ -331,11 +348,15 @@ public static class BlockedInteger
 
 				if (_isArithmetic)
 				{
-					Int64 diff = value - _prev;
+					Int64 diff = unchecked(value - _prev);
 					if (_buffer.Count == 1)
+					{
 						_prevDiff = diff;
+					}
 					else if (diff != _prevDiff)
+					{
 						_isArithmetic = false;
+					}
 				}
 			}
 
@@ -346,26 +367,51 @@ public static class BlockedInteger
 			return true;
 		}
 
+		public void Feed(PbBlockedInteger proto, Int64 value)
+		{
+			if (!TryAdd(value))
+			{
+				Flush(proto);
+				TryAdd(value);
+			}
+		}
+
 		public void Flush(PbBlockedInteger proto)
 		{
 			if (_buffer.Count == 0) return;
 
 			if (_isConstant && _buffer.Count >= RepeatableBlockMinCount)
+			{
 				proto.Blocks.Add(EncodeConstant(_buffer));
+			}
 			else if (_isArithmetic && _buffer.Count >= RepeatableBlockMinCount)
+			{
 				proto.Blocks.Add(EncodeArithmetic(_buffer));
-			else if (_isStrictlyAscending && _buffer.Count >= BitmapBlockMinCount
+			}
+			else if (_isStrictlyAscending
+				&& _buffer.Count >= BitmapBlockMinCount
 				&& (_max - _min) <= BitmapBlockRange)
+			{
 				proto.Blocks.Add(EncodeAscendingBitmap(_buffer));
+			}
 			else if (_isAscending)
+			{
 				proto.Blocks.Add(EncodeAscending(_buffer));
-			else if (_isStrictlyDescending && _buffer.Count >= BitmapBlockMinCount
+			}
+			else if (_isStrictlyDescending
+				&& _buffer.Count >= BitmapBlockMinCount
 				&& (_max - _min) <= BitmapBlockRange)
+			{
 				proto.Blocks.Add(EncodeDescendingBitmap(_buffer));
+			}
 			else if (_isDescending)
+			{
 				proto.Blocks.Add(EncodeDescending(_buffer));
+			}
 			else
+			{
 				proto.Blocks.Add(EncodeDelta(_buffer, _min, _max));
+			}
 
 			Reset();
 		}
