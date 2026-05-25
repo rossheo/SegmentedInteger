@@ -9,7 +9,7 @@
 | 클래스 | 입력 조건 | DataType | 복잡도 |
 |---|---|---|---|
 | `BlockedInteger` | 임의의 `Int64` 집합 (순서 보장, 중복 허용) | `IEnumerable<Int64>` | 높음 |
-| `SortedSetInteger` | 중복 없는 정렬된 0을 포함한 양수 `Int64` 집합 | `SortedSet<Int64>` | 낮음 |
+| `SortedSetInteger` | 중복 없이 정렬된 0을 포함한 양수 `Int64` 집합 | `SortedSet<Int64>` | 낮음 |
 
 > `SortedSetInteger` 이후에 `BlockedInteger`를 개발하여 더 범용적으로 사용할 수 있게 개선하였음.
 
@@ -17,7 +17,7 @@
 
 ## BlockedInteger
 
-임의의 `Int64` 시퀀스를 패턴 감지 방식으로 다양한 방식으로 Serialize 합니다. (순서를 보장하고 중복을 허용합니다.)
+임의의 `Int64` 시퀀스를 패턴에 따라 다양한 방식으로 Serialize 합니다. (순서를 보장하고 중복을 허용합니다.)
 
 ### 블록 타입 (우선순위 순)
 
@@ -80,7 +80,7 @@ BlockedInteger.Decode(proto, out var decoded);
 
 ## SortedSetInteger
 
-정렬된 비음수 `Int64` 집합을 두 가지 청크 방식으로 압축합니다.
+정렬된 0 포함 양수 `Int64` 집합을 두 가지 청크 방식으로 Serialize 합니다.
 
 ### 청크 타입
 
