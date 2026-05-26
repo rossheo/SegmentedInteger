@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Collections.Generic;
 
 namespace Library.SegmentedIntegers;
 
@@ -13,6 +14,54 @@ using PbAscendingBlock = Pb.BlockedInteger.Types.Block.Types.AscendingBlock;
 using PbDescendingBitmapBlock = Pb.BlockedInteger.Types.Block.Types.DescendingBitmapBlock;
 using PbDescendingBlock = Pb.BlockedInteger.Types.Block.Types.DescendingBlock;
 using PbDeltaBlock = Pb.BlockedInteger.Types.Block.Types.DeltaBlock;
+
+/// <summary>
+/// Int64 시퀀스 압축의 통계 정보.
+/// </summary>
+public sealed class CompressionStatistics
+{
+	/// <summary>원본 값의 개수.</summary>
+	public Int32 TotalValues { get; set; }
+
+	/// <summary>원본 크기 (바이트).</summary>
+	public Int32 OriginalSize { get; set; }
+
+	/// <summary>압축 크기 (바이트).</summary>
+	public Int32 CompressedSize { get; set; }
+
+	/// <summary>압축률 (0.0~1.0, 1.0은 100% 압축 의미).</summary>
+	public Double CompressionRatio { get; private set; }
+
+	/// <summary>블록 개수.</summary>
+	public Int32 BlockCount { get; set; }
+
+	/// <summary>평균 블록 크기 (바이트).</summary>
+	public Double AverageBlockSize { get; private set; }
+
+	/// <summary>블록 타입별 분포.</summary>
+	public Dictionary<String, Int32> BlockTypeDistribution { get; set; } = [];
+
+	public void CalculateDerivedValues()
+	{
+		if (OriginalSize > 0)
+		{
+			CompressionRatio = (Double)CompressedSize / OriginalSize;
+		}
+		else
+		{
+			CompressionRatio = 0.0;
+		}
+
+		if (BlockCount > 0)
+		{
+			AverageBlockSize = (Double)CompressedSize / BlockCount;
+		}
+		else
+		{
+			AverageBlockSize = 0.0;
+		}
+	}
+}
 
 /// <summary>
 /// 임의의 Int64 시퀀스를 패턴 감지 블록 방식으로 압축:
@@ -88,6 +137,99 @@ public static class BlockedInteger
 		}
 
 		return errors.Count == 0;
+	}
+
+	/// <summary>
+	/// 압축된 데이터의 통계 정보를 계산합니다.
+	/// </summary>
+	/// <param name="proto">분석할 프로토콜 버퍼</param>
+	/// <param name="statistics">통계 정보</param>
+	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
+	public static void GetCompressionStatistics(PbBlockedInteger proto, out CompressionStatistics statistics)
+	{
+		ArgumentNullException.ThrowIfNull(proto);
+
+		statistics = new()
+		{
+			OriginalSize = 0,
+			CompressedSize = proto.CalculateSize(),
+			BlockCount = proto.Blocks.Count,
+			TotalValues = 0
+		};
+
+		foreach (PbBlock block in proto.Blocks)
+		{
+			AddBlockStatistics(block, statistics);
+		}
+
+		statistics.OriginalSize = statistics.TotalValues * sizeof(Int64);
+		statistics.CalculateDerivedValues();
+	}
+
+	private static void AddBlockStatistics(PbBlock block, CompressionStatistics statistics)
+	{
+		String blockType = block.BlockOneofCase.ToString();
+
+		if (!statistics.BlockTypeDistribution.ContainsKey(blockType))
+		{
+			statistics.BlockTypeDistribution[blockType] = 0;
+		}
+
+		statistics.BlockTypeDistribution[blockType]++;
+
+		switch (block.BlockOneofCase)
+		{
+			case PbBlock.BlockOneofOneofCase.Constant:
+				if (block.Constant != null)
+				{
+					statistics.TotalValues += block.Constant.Count;
+				}
+				break;
+
+			case PbBlock.BlockOneofOneofCase.Arithmetic:
+				if (block.Arithmetic != null)
+				{
+					statistics.TotalValues += block.Arithmetic.Count;
+				}
+				break;
+
+			case PbBlock.BlockOneofOneofCase.AscendingBitmap:
+				if (block.AscendingBitmap != null)
+				{
+					Int32 count = BitOperations.PopCount(block.AscendingBitmap.Bits) + 1;
+					statistics.TotalValues += count;
+				}
+				break;
+
+			case PbBlock.BlockOneofOneofCase.Ascending:
+				if (block.Ascending != null)
+				{
+					statistics.TotalValues += block.Ascending.Diffs.Count + 1;
+				}
+				break;
+
+			case PbBlock.BlockOneofOneofCase.DescendingBitmap:
+				if (block.DescendingBitmap != null)
+				{
+					Int32 count = BitOperations.PopCount(block.DescendingBitmap.Bits) + 1;
+					statistics.TotalValues += count;
+				}
+				break;
+
+			case PbBlock.BlockOneofOneofCase.Descending:
+				if (block.Descending != null)
+				{
+					statistics.TotalValues += block.Descending.Diffs.Count + 1;
+				}
+				break;
+
+			case PbBlock.BlockOneofOneofCase.Delta:
+				if (block.Delta != null)
+				{
+					statistics.TotalValues += block.Delta.Deltas.Count;
+				}
+				break;
+		}
 	}
 
 	/// <summary>
