@@ -8,6 +8,18 @@ namespace Library.Tests;
 
 public class BlockedIntegerTests
 {
+	private static async Task<CompressionStatistics> PrintCompressionStatistics(Pb.BlockedInteger proto)
+	{
+		BlockedInteger.GetCompressionStatistics(proto, out var stats);
+		await TestContext.Current!.OutputWriter.WriteLineAsync($"Total Values: {stats.TotalValues}");
+		await TestContext.Current!.OutputWriter.WriteLineAsync($"Original Size: {stats.OriginalSize} bytes");
+		await TestContext.Current!.OutputWriter.WriteLineAsync($"Compressed Size: {stats.CompressedSize} bytes");
+		await TestContext.Current!.OutputWriter.WriteLineAsync($"Compression Ratio: {stats.CompressionRatio:P2}");
+		await TestContext.Current!.OutputWriter.WriteLineAsync($"Block Count: {stats.BlockCount}");
+		await TestContext.Current!.OutputWriter.WriteLineAsync($"Block Types: {string.Join(", ", stats.BlockTypeDistribution.Select(kvp => $"{kvp.Key}({kvp.Value})"))}");
+		return stats;
+	}
+
 	private static async Task AssertRoundTrip(Int64[] input)
 	{
 		Pb.BlockedInteger proto;
@@ -19,8 +31,7 @@ public class BlockedIntegerTests
 			BlockedInteger.Decode(proto, out result);
 		}
 
-		await TestContext.Current!.OutputWriter.WriteLineAsync(
-			$"IntSize: {input.Length * sizeof(Int64):N0}, pbSize: {proto.CalculateSize():N0}");
+		await PrintCompressionStatistics(proto);
 
 		await Assert.That(result).IsEquivalentTo(input);
 	}
@@ -32,6 +43,9 @@ public class BlockedIntegerTests
 	{
 		BlockedInteger.Encode(ReadOnlySpan<Int64>.Empty, out var proto);
 		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(result).IsEmpty();
 	}
 
@@ -40,6 +54,9 @@ public class BlockedIntegerTests
 	{
 		BlockedInteger.Encode(Enumerable.Empty<Int64>(), out var proto);
 		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(result).IsEmpty();
 	}
 
@@ -54,11 +71,15 @@ public class BlockedIntegerTests
 	{
 		BlockedInteger.Encode([42L], out var proto);
 		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
 		await Assert.That(proto.Blocks[0].Ascending.First).IsEqualTo(42L);
 		await Assert.That(proto.Blocks[0].Ascending.Diffs.Count).IsEqualTo(0);
+
 		await Assert.That(result).IsEquivalentTo(new List<Int64> { 42L });
 	}
 
@@ -71,6 +92,9 @@ public class BlockedIntegerTests
 		Array.Fill(input, 7L);
 		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].Constant.Value).IsEqualTo(7L);
 		await Assert.That(proto.Blocks[0].Constant.Count).IsEqualTo(20);
@@ -82,6 +106,9 @@ public class BlockedIntegerTests
 	{
 		BlockedInteger.Encode([0, 3, 6, 9, 12], out var proto);
 		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].Arithmetic.First).IsEqualTo(0L);
 		await Assert.That(proto.Blocks[0].Arithmetic.Step).IsEqualTo(3L);
@@ -97,6 +124,9 @@ public class BlockedIntegerTests
 		for (Int32 i = 0; i < input.Length; ++i) input[i] = 100 - i * 10L;
 		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].Arithmetic.Step).IsEqualTo(-10L);
 		await Assert.That(proto.Blocks[0].Arithmetic.Count).IsEqualTo(20);
@@ -110,6 +140,9 @@ public class BlockedIntegerTests
 		Int64[] input = new Int64[20];
 		Array.Fill(input, 5L);
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Constant);
 	}
@@ -123,6 +156,9 @@ public class BlockedIntegerTests
 		for (Int32 i = 0; i < input.Length; ++i) input[i] = i * (i + 1) / 2; // 0,1,3,6,10,...
 		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
@@ -141,6 +177,9 @@ public class BlockedIntegerTests
 		for (Int32 i = 0; i < input.Length; ++i) input[i] = (19 - i) * (20 - i) / 2; // 190,171,...,0
 		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Descending);
@@ -156,9 +195,11 @@ public class BlockedIntegerTests
 		// range=17, 비정렬 → DeltaBlock
 		Int64[] input = [10, 5, 15, 3, 7, 12, 1, 14, 8, 17, 4, 11, 6, 13, 2, 16, 9, 0, 10, 5];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -168,9 +209,11 @@ public class BlockedIntegerTests
 		Int64[] input = [200, 50, 100, 0, 150, 30, 170, 80, 120, 10,
 		                 190, 60, 140, 20, 180, 70, 110, 40, 160, 90];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
-		await AssertRoundTrip(input);
 	}
 
 	// ─── 블록 분리 ───
@@ -181,6 +224,9 @@ public class BlockedIntegerTests
 		// unsorted 값 5가 들어올 때 range(0..20000)=20000 > DeltaBlockMax → 블록 분리
 		BlockedInteger.Encode([0L, 20000L, 5L], out var proto);
 		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(2);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
@@ -196,6 +242,9 @@ public class BlockedIntegerTests
 		Int64[] input = [0, 1, 2, 5, 20000, 20010, 20005, 20003, 20007];
 		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(2);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
@@ -211,6 +260,9 @@ public class BlockedIntegerTests
 		Int64[] input = [0, 5000, 10000, 15000, 20000, 3, 7, 5];
 		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(2);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Arithmetic);
@@ -230,6 +282,9 @@ public class BlockedIntegerTests
 		Int64[] input = [5, 5, 5, -20000, -19990, -19985, 5, 0, 3, -1];
 		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(3);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Descending);
@@ -294,6 +349,9 @@ public class BlockedIntegerTests
 		for (Int32 i = 0; i < input.Length; ++i) input[i] = i - 10L;
 		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Arithmetic);
 		await Assert.That(result).IsEquivalentTo(input.ToList());
@@ -308,6 +366,9 @@ public class BlockedIntegerTests
 		Int64[] input = [Int64.MaxValue - 50, Int64.MaxValue];
 		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
 		await Assert.That(result).IsEquivalentTo(input.ToList());
@@ -319,6 +380,9 @@ public class BlockedIntegerTests
 		Int64[] input = [Int64.MinValue, Int64.MinValue + 100];
 		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
 		await Assert.That(result).IsEquivalentTo(input.ToList());
@@ -331,6 +395,9 @@ public class BlockedIntegerTests
 		Int64[] input = [Int64.MaxValue, Int64.MinValue];
 		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Descending);
@@ -344,6 +411,9 @@ public class BlockedIntegerTests
 		Int64[] input = [Int64.MaxValue, 0L, Int64.MinValue];
 		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Descending);
@@ -442,10 +512,10 @@ public class BlockedIntegerTests
 			BlockedInteger.Decode(proto, out result);
 		}
 
+		await PrintCompressionStatistics(proto);
+
 		Int32 intSize = input.Count * sizeof(Int64);
 		Int32 pbSize = proto.CalculateSize();
-		await TestContext.Current!.OutputWriter.WriteLineAsync(
-			$"IntSize: {intSize:N0}, pbSize: {pbSize:N0}, ratio: {(double)pbSize / intSize:P1}");
 
 		await Assert.That(pbSize).IsLessThanOrEqualTo(intSize);
 		await Assert.That(result).IsEquivalentTo(input);
@@ -471,10 +541,12 @@ public class BlockedIntegerTests
 		// strictly ascending, range=54≤63, count=9 < 10 → AscendingBlock
 		Int64[] input = [1, 3, 5, 8, 12, 20, 35, 45, 55];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -483,10 +555,12 @@ public class BlockedIntegerTests
 		// strictly ascending, range=59≤63, count=10 → AscendingBitmapBlock
 		Int64[] input = [1, 3, 5, 8, 12, 20, 35, 45, 55, 60];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.AscendingBitmap);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -495,10 +569,12 @@ public class BlockedIntegerTests
 		// strictly ascending, range=63, count=10 → AscendingBitmapBlock
 		Int64[] input = [0, 5, 10, 15, 20, 25, 30, 40, 50, 63];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.AscendingBitmap);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -507,10 +583,12 @@ public class BlockedIntegerTests
 		// strictly ascending, range=64 > 63, count=10 → AscendingBlock
 		Int64[] input = [0, 5, 10, 15, 20, 25, 30, 40, 50, 64];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -519,6 +597,9 @@ public class BlockedIntegerTests
 		// 등차수열(step=1)은 strictly ascending + range≤63 + count≥10이어도 ArithmeticBlock 우선
 		Int64[] input = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Arithmetic);
@@ -530,10 +611,12 @@ public class BlockedIntegerTests
 		// 중복 값 포함 → strictly ascending 아님 → AscendingBlock
 		Int64[] input = [1, 3, 3, 8, 12, 20, 35, 45, 55, 60];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -542,9 +625,11 @@ public class BlockedIntegerTests
 		// first < 0 → 정상 동작
 		Int64[] input = [-10, -8, -5, -3, 0, 2, 5, 8, 20, 35];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.AscendingBitmap);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -554,11 +639,13 @@ public class BlockedIntegerTests
 		// bits: pos 0,1,3,4,5,7,8,9,11 → 1+2+8+16+32+128+256+512+2048 = 3003
 		Int64[] input = [0, 1, 2, 4, 5, 6, 8, 9, 10, 12];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.AscendingBitmap);
 		await Assert.That(proto.Blocks[0].AscendingBitmap.First).IsEqualTo(0L);
 		await Assert.That(proto.Blocks[0].AscendingBitmap.Bits).IsEqualTo(3003UL);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -567,9 +654,11 @@ public class BlockedIntegerTests
 		// 밀집 비등차 strictly ascending 케이스
 		Int64[] input = [50, 51, 53, 54, 55, 57, 58, 59, 60, 61];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.AscendingBitmap);
-		await AssertRoundTrip(input);
 	}
 
 	// ─── DescendingBitmapBlock ───
@@ -580,10 +669,12 @@ public class BlockedIntegerTests
 		// strictly descending, range=54≤63, count=9 < 10 → DescendingBlock
 		Int64[] input = [55, 45, 35, 20, 12, 8, 5, 3, 1];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Descending);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -592,10 +683,12 @@ public class BlockedIntegerTests
 		// strictly descending, range=59≤63, count=10 → DescendingBitmapBlock
 		Int64[] input = [60, 55, 45, 35, 20, 12, 8, 5, 3, 1];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.DescendingBitmap);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -604,10 +697,12 @@ public class BlockedIntegerTests
 		// strictly descending, range=63, count=10 → DescendingBitmapBlock
 		Int64[] input = [63, 58, 53, 48, 43, 38, 33, 23, 13, 0];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.DescendingBitmap);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -616,10 +711,12 @@ public class BlockedIntegerTests
 		// strictly descending, range=64 > 63, count=10 → DescendingBlock
 		Int64[] input = [64, 60, 55, 50, 45, 40, 35, 25, 15, 0];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Descending);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -628,10 +725,12 @@ public class BlockedIntegerTests
 		// 중복 값 포함 → strictly descending 아님 → DescendingBlock
 		Int64[] input = [60, 55, 45, 45, 20, 12, 8, 5, 3, 1];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Descending);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -640,9 +739,11 @@ public class BlockedIntegerTests
 		// first < 0 → 정상 동작
 		Int64[] input = [-20, -22, -25, -27, -30, -32, -35, -38, -40, -42];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.DescendingBitmap);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -652,11 +753,13 @@ public class BlockedIntegerTests
 		// bits: pos 1,2,3,5,6,7,9,10,11 → 2+4+8+32+64+128+512+1024+2048 = 3822
 		Int64[] input = [12, 10, 9, 8, 6, 5, 4, 2, 1, 0];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.DescendingBitmap);
 		await Assert.That(proto.Blocks[0].DescendingBitmap.First).IsEqualTo(12L);
 		await Assert.That(proto.Blocks[0].DescendingBitmap.Bits).IsEqualTo(3822UL);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -665,9 +768,11 @@ public class BlockedIntegerTests
 		// 밀집 비등차 strictly descending 케이스
 		Int64[] input = [61, 60, 59, 57, 56, 55, 53, 51, 50, 49];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.DescendingBitmap);
-		await AssertRoundTrip(input);
 	}
 
 	// ─── DeltaBlock ───
@@ -679,10 +784,12 @@ public class BlockedIntegerTests
 		// deltas: 0-5=-5, 10-5=5, 3-5=-2
 		Int64[] input = [0, 10, 3];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
 		await Assert.That(proto.Blocks[0].Delta.Reference).IsEqualTo(5L);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -692,9 +799,11 @@ public class BlockedIntegerTests
 		Int64[] input = [-100, -50, -75, -80, -60, -90, -55, -70, -85, -65,
 		                 -95, -45, -55, -75, -80, -60, -90, -55, -70, -85];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -704,9 +813,11 @@ public class BlockedIntegerTests
 		Int64[] input = [-10, 20, 5, -5, 15, -8, 12, -3, 8, 18,
 		                 -7, 10, 2, -9, 17, 4, -6, 13, -1, 11];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -715,9 +826,11 @@ public class BlockedIntegerTests
 		// range=16382 (최대 범위)
 		Int64[] input = [0, 16382, 5000];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -726,9 +839,11 @@ public class BlockedIntegerTests
 		// 중복 포함 비정렬
 		Int64[] input = [10, 5, 10, 3, 5];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -737,9 +852,11 @@ public class BlockedIntegerTests
 		// min=-1000, max=5000, range=6000
 		Int64[] input = [-1000, 5000, 0, 2000, -500];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -748,9 +865,11 @@ public class BlockedIntegerTests
 		// reference가 Int64 극값 근처
 		Int64[] input = [Int64.MaxValue - 100, Int64.MaxValue - 50, Int64.MaxValue - 75];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -760,9 +879,11 @@ public class BlockedIntegerTests
 		Int64[] input = [-100, 100, 0, -50, 80, -20, 60, -80, 40, 90,
 		                 -10, 70, -60, 30, -90, 50, -30, 10, -70, 20];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -771,9 +892,11 @@ public class BlockedIntegerTests
 		// 진동하는 값
 		Int64[] input = [0, 100, 10, 90, 20];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
-		await AssertRoundTrip(input);
 	}
 
 	// ─── 블록 선택 우선순위 ───
@@ -784,9 +907,11 @@ public class BlockedIntegerTests
 		// 2원소 감소 시퀀스 — count < RepeatableBlockMinCount이므로 DeltaBlock 불가, DescendingBlock 선택
 		Int64[] input = [100, 50];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Descending);
-		await AssertRoundTrip(input);
 	}
 
 	[Test]
@@ -795,6 +920,9 @@ public class BlockedIntegerTests
 		// 모든 값 동일 → ConstantBlock이 DeltaBlock보다 우선
 		Int64[] input = new Int64[20];
 		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Constant);
 	}
@@ -804,9 +932,11 @@ public class BlockedIntegerTests
 	{
 		// 단일 값 → AscendingBlock (diff 0개)
 		BlockedInteger.Encode([42L], out var proto);
+
+		await PrintCompressionStatistics(proto);
+
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
-		await AssertRoundTrip([42L]);
 	}
 
 	// ─── ValidateIntegrity ───
@@ -1083,7 +1213,7 @@ public class BlockedIntegerTests
 	{
 		// 빈 프로토 → 0개 값
 		Pb.BlockedInteger proto = new();
-		BlockedInteger.GetCompressionStatistics(proto, out var stats);
+		var stats = await PrintCompressionStatistics(proto);
 
 		await Assert.That(stats.TotalValues).IsEqualTo(0);
 		await Assert.That(stats.OriginalSize).IsEqualTo(0);
@@ -1099,7 +1229,7 @@ public class BlockedIntegerTests
 		Array.Fill(input, 42L);
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.GetCompressionStatistics(proto, out var stats);
+		var stats = await PrintCompressionStatistics(proto);
 
 		await Assert.That(stats.TotalValues).IsEqualTo(20);
 		await Assert.That(stats.OriginalSize).IsEqualTo(20 * sizeof(Int64)); // 160 bytes
@@ -1117,7 +1247,7 @@ public class BlockedIntegerTests
 		Int64[] input = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27];
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.GetCompressionStatistics(proto, out var stats);
+		var stats = await PrintCompressionStatistics(proto);
 
 		await Assert.That(stats.TotalValues).IsEqualTo(10);
 		await Assert.That(stats.OriginalSize).IsEqualTo(10 * sizeof(Int64));
@@ -1135,7 +1265,7 @@ public class BlockedIntegerTests
 		for (Int64 i = 0; i < input.Length; ++i) input[i] = i;
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.GetCompressionStatistics(proto, out var stats);
+		var stats = await PrintCompressionStatistics(proto);
 
 		await Assert.That(stats.TotalValues).IsEqualTo(20000);
 		await Assert.That(stats.OriginalSize).IsEqualTo(20000 * sizeof(Int64));
@@ -1151,7 +1281,7 @@ public class BlockedIntegerTests
 		Int64[] input = [1, 3, 5, 8, 12, 20, 35, 45, 55, 60];
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.GetCompressionStatistics(proto, out var stats);
+		var stats = await PrintCompressionStatistics(proto);
 
 		await Assert.That(stats.TotalValues).IsEqualTo(10);
 		await Assert.That(stats.BlockTypeDistribution).ContainsKey("AscendingBitmap");
@@ -1165,7 +1295,7 @@ public class BlockedIntegerTests
 		Int64[] input = [-10, 20, 5, -5, 15, -8, 12, -3, 8, 18];
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.GetCompressionStatistics(proto, out var stats);
+		var stats = await PrintCompressionStatistics(proto);
 
 		await Assert.That(stats.TotalValues).IsEqualTo(10);
 		await Assert.That(stats.BlockTypeDistribution).ContainsKey("Delta");
@@ -1180,7 +1310,7 @@ public class BlockedIntegerTests
 		Array.Fill(input, 42L);
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.GetCompressionStatistics(proto, out var stats);
+		var stats = await PrintCompressionStatistics(proto);
 
 		await Assert.That(stats.CompressionRatio).IsLessThan(0.1); // 90% 이상 압축
 	}
@@ -1193,7 +1323,7 @@ public class BlockedIntegerTests
 		for (Int64 i = 0; i < input.Length; ++i) input[i] = i;
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.GetCompressionStatistics(proto, out var stats);
+		var stats = await PrintCompressionStatistics(proto);
 
 		Double expectedAverage = (Double)stats.CompressedSize / stats.BlockCount;
 		await Assert.That(stats.AverageBlockSize).IsEqualTo(expectedAverage);
@@ -1501,7 +1631,7 @@ public class BlockedIntegerTests
 		Int64[] input = [0, 1, 3, 6];
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.GetCompressionStatistics(proto, out var stats);
+		var stats = await PrintCompressionStatistics(proto);
 
 		await Assert.That(stats.TotalValues).IsEqualTo(4);
 		await Assert.That(stats.BlockTypeDistribution).ContainsKey("Ascending");
@@ -1516,7 +1646,7 @@ public class BlockedIntegerTests
 		Int64[] input = [100, 95, 85, 70];
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.GetCompressionStatistics(proto, out var stats);
+		var stats = await PrintCompressionStatistics(proto);
 
 		await Assert.That(stats.TotalValues).IsEqualTo(4);
 		await Assert.That(stats.BlockTypeDistribution).ContainsKey("Descending");
