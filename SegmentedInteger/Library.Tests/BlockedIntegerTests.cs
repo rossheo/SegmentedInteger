@@ -8,7 +8,7 @@ namespace Library.Tests;
 
 public class BlockedIntegerTests
 {
-	private static async Task<CompressionStatistics> PrintCompressionStatistics(Pb.BlockedInteger proto)
+	private static async Task<BlockedInteger.CompressionStatistics> PrintCompressionStatistics(Pb.BlockedInteger proto)
 	{
 		BlockedInteger.GetCompressionStatistics(proto, out var stats);
 		await TestContext.Current!.OutputWriter.WriteLineAsync($"Total Values: {stats.TotalValues}");
