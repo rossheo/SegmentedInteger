@@ -166,6 +166,204 @@ public static class BlockedInteger
 		statistics.CalculateDerivedValues();
 	}
 
+	private static Int32 GetBlockValueCount(PbBlock block)
+	{
+		switch (block.BlockOneofCase)
+		{
+			case PbBlock.BlockOneofOneofCase.Constant:
+				return block.Constant?.Count ?? 0;
+
+			case PbBlock.BlockOneofOneofCase.Arithmetic:
+				return block.Arithmetic?.Count ?? 0;
+
+			case PbBlock.BlockOneofOneofCase.AscendingBitmap:
+				if (block.AscendingBitmap == null) return 0;
+				return BitOperations.PopCount(block.AscendingBitmap.Bits) + 1;
+
+			case PbBlock.BlockOneofOneofCase.Ascending:
+				if (block.Ascending == null) return 0;
+				return block.Ascending.Diffs.Count + 1;
+
+			case PbBlock.BlockOneofOneofCase.DescendingBitmap:
+				if (block.DescendingBitmap == null) return 0;
+				return BitOperations.PopCount(block.DescendingBitmap.Bits) + 1;
+
+			case PbBlock.BlockOneofOneofCase.Descending:
+				if (block.Descending == null) return 0;
+				return block.Descending.Diffs.Count + 1;
+
+			case PbBlock.BlockOneofOneofCase.Delta:
+				return block.Delta?.Deltas.Count ?? 0;
+
+			default:
+				return 0;
+		}
+	}
+
+	private static void DecodeBlockRange(PbBlock block, Int32 startOffset, Int32 endOffset, List<Int64> output)
+	{
+		switch (block.BlockOneofCase)
+		{
+			case PbBlock.BlockOneofOneofCase.Constant:
+				DecodeConstantRange(block.Constant, startOffset, endOffset, output);
+				break;
+
+			case PbBlock.BlockOneofOneofCase.Arithmetic:
+				DecodeArithmeticRange(block.Arithmetic, startOffset, endOffset, output);
+				break;
+
+			case PbBlock.BlockOneofOneofCase.AscendingBitmap:
+				DecodeAscendingBitmapRange(block.AscendingBitmap, startOffset, endOffset, output);
+				break;
+
+			case PbBlock.BlockOneofOneofCase.Ascending:
+				DecodeAscendingRange(block.Ascending, startOffset, endOffset, output);
+				break;
+
+			case PbBlock.BlockOneofOneofCase.DescendingBitmap:
+				DecodeDescendingBitmapRange(block.DescendingBitmap, startOffset, endOffset, output);
+				break;
+
+			case PbBlock.BlockOneofOneofCase.Descending:
+				DecodeDescendingRange(block.Descending, startOffset, endOffset, output);
+				break;
+
+			case PbBlock.BlockOneofOneofCase.Delta:
+				DecodeDeltaRange(block.Delta, startOffset, endOffset, output);
+				break;
+		}
+	}
+
+	private static void DecodeConstantRange(PbConstantBlock block, Int32 startOffset, Int32 endOffset, List<Int64> output)
+	{
+		for (Int32 i = startOffset; i < endOffset; ++i)
+		{
+			output.Add(block.Value);
+		}
+	}
+
+	private static void DecodeArithmeticRange(PbArithmeticBlock block, Int32 startOffset, Int32 endOffset, List<Int64> output)
+	{
+		Int64 current = unchecked(block.First + (Int64)startOffset * block.Step);
+		for (Int32 i = startOffset; i < endOffset; ++i)
+		{
+			output.Add(current);
+			current = unchecked(current + block.Step);
+		}
+	}
+
+	private static void DecodeAscendingBitmapRange(PbAscendingBitmapBlock block, Int32 startOffset, Int32 endOffset, List<Int64> output)
+	{
+		Int64 first = block.First;
+		Int32 currentPos = 0;
+
+		// 첫 값 (인덱스 0)
+		if (startOffset == 0 && endOffset > 0)
+		{
+			output.Add(first);
+			currentPos = 1;
+		}
+		else if (startOffset > 0)
+		{
+			currentPos = 1;
+		}
+
+		UInt64 bits = block.Bits;
+		Int32 bitIndex = 0;
+
+		while (bits != 0 && currentPos < endOffset)
+		{
+			Int32 trailingZeros = BitOperations.TrailingZeroCount(bits);
+			bitIndex += trailingZeros + 1;
+
+			if (currentPos >= startOffset)
+			{
+				output.Add(first + bitIndex);
+			}
+
+			currentPos++;
+			bits >>= trailingZeros + 1;
+		}
+	}
+
+	private static void DecodeAscendingRange(PbAscendingBlock block, Int32 startOffset, Int32 endOffset, List<Int64> output)
+	{
+		if (startOffset == 0)
+		{
+			output.Add(block.First);
+		}
+
+		Int64 current = block.First;
+		for (Int32 i = 0; i < block.Diffs.Count && i + 1 < endOffset; ++i)
+		{
+			current = unchecked(current + (Int64)block.Diffs[i]);
+			if (i + 1 >= startOffset)
+			{
+				output.Add(current);
+			}
+		}
+	}
+
+	private static void DecodeDescendingBitmapRange(PbDescendingBitmapBlock block, Int32 startOffset, Int32 endOffset, List<Int64> output)
+	{
+		Int64 first = block.First;
+		Int32 currentPos = 0;
+
+		// 첫 값 (인덱스 0)
+		if (startOffset == 0 && endOffset > 0)
+		{
+			output.Add(first);
+			currentPos = 1;
+		}
+		else if (startOffset > 0)
+		{
+			currentPos = 1;
+		}
+
+		UInt64 bits = block.Bits;
+		Int32 bitIndex = 0;
+
+		while (bits != 0 && currentPos < endOffset)
+		{
+			Int32 trailingZeros = BitOperations.TrailingZeroCount(bits);
+			bitIndex += trailingZeros + 1;
+
+			if (currentPos >= startOffset)
+			{
+				output.Add(first - bitIndex);
+			}
+
+			currentPos++;
+			bits >>= trailingZeros + 1;
+		}
+	}
+
+	private static void DecodeDescendingRange(PbDescendingBlock block, Int32 startOffset, Int32 endOffset, List<Int64> output)
+	{
+		if (startOffset == 0)
+		{
+			output.Add(block.First);
+		}
+
+		Int64 current = block.First;
+		for (Int32 i = 0; i < block.Diffs.Count && i + 1 < endOffset; ++i)
+		{
+			current = unchecked(current - (Int64)block.Diffs[i]);
+			if (i + 1 >= startOffset)
+			{
+				output.Add(current);
+			}
+		}
+	}
+
+	private static void DecodeDeltaRange(PbDeltaBlock block, Int32 startOffset, Int32 endOffset, List<Int64> output)
+	{
+		for (Int32 i = startOffset; i < endOffset && i < block.Deltas.Count; ++i)
+		{
+			output.Add(unchecked(block.Reference + block.Deltas[i]));
+		}
+	}
+
 	private static void AddBlockStatistics(PbBlock block, CompressionStatistics statistics)
 	{
 		String blockType = block.BlockOneofCase.ToString();
@@ -176,60 +374,7 @@ public static class BlockedInteger
 		}
 
 		statistics.BlockTypeDistribution[blockType]++;
-
-		switch (block.BlockOneofCase)
-		{
-			case PbBlock.BlockOneofOneofCase.Constant:
-				if (block.Constant != null)
-				{
-					statistics.TotalValues += block.Constant.Count;
-				}
-				break;
-
-			case PbBlock.BlockOneofOneofCase.Arithmetic:
-				if (block.Arithmetic != null)
-				{
-					statistics.TotalValues += block.Arithmetic.Count;
-				}
-				break;
-
-			case PbBlock.BlockOneofOneofCase.AscendingBitmap:
-				if (block.AscendingBitmap != null)
-				{
-					Int32 count = BitOperations.PopCount(block.AscendingBitmap.Bits) + 1;
-					statistics.TotalValues += count;
-				}
-				break;
-
-			case PbBlock.BlockOneofOneofCase.Ascending:
-				if (block.Ascending != null)
-				{
-					statistics.TotalValues += block.Ascending.Diffs.Count + 1;
-				}
-				break;
-
-			case PbBlock.BlockOneofOneofCase.DescendingBitmap:
-				if (block.DescendingBitmap != null)
-				{
-					Int32 count = BitOperations.PopCount(block.DescendingBitmap.Bits) + 1;
-					statistics.TotalValues += count;
-				}
-				break;
-
-			case PbBlock.BlockOneofOneofCase.Descending:
-				if (block.Descending != null)
-				{
-					statistics.TotalValues += block.Descending.Diffs.Count + 1;
-				}
-				break;
-
-			case PbBlock.BlockOneofOneofCase.Delta:
-				if (block.Delta != null)
-				{
-					statistics.TotalValues += block.Delta.Deltas.Count;
-				}
-				break;
-		}
+		statistics.TotalValues += GetBlockValueCount(block);
 	}
 
 	/// <summary>
@@ -270,6 +415,54 @@ public static class BlockedInteger
 					throw new InvalidOperationException($"Unknown block type: {block.BlockOneofCase}");
 			}
 		}
+		integers = result;
+	}
+
+	/// <summary>
+	/// 지정된 인덱스 범위의 값들만 디코딩합니다.
+	/// </summary>
+	/// <param name="proto">디코딩할 프로토콜 버퍼</param>
+	/// <param name="startIndex">시작 인덱스 (포함)</param>
+	/// <param name="endIndex">종료 인덱스 (제외)</param>
+	/// <param name="integers">디코딩된 값 목록</param>
+	/// <remarks>
+	/// startIndex must be less than or equal to endIndex; ArgumentException is thrown otherwise.
+	/// Out-of-bounds indices are automatically clamped to valid range.
+	/// Trusted input only. External proto Count range is not validated.
+	/// </remarks>
+	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
+	/// <exception cref="ArgumentException">startIndex &gt; endIndex인 경우</exception>
+	public static void DecodeRange(PbBlockedInteger proto, Int32 startIndex, Int32 endIndex, out IReadOnlyList<Int64> integers)
+	{
+		ArgumentNullException.ThrowIfNull(proto);
+		if (startIndex > endIndex)
+			throw new ArgumentException($"startIndex ({startIndex}) must be <= endIndex ({endIndex})", nameof(startIndex));
+
+		List<Int64> result = [];
+		Int32 currentIndex = 0;
+
+		foreach (PbBlock block in proto.Blocks)
+		{
+			Int32 blockValueCount = GetBlockValueCount(block);
+			Int32 blockEndIndex = currentIndex + blockValueCount;
+
+			// 블록이 요청 범위와 겹치는지 확인
+			if (blockEndIndex > startIndex && currentIndex < endIndex)
+			{
+				// 블록 내에서 필요한 부분의 시작/종료 오프셋
+				Int32 blockStartOffset = Math.Max(0, startIndex - currentIndex);
+				Int32 blockEndOffset = Math.Min(blockValueCount, endIndex - currentIndex);
+
+				DecodeBlockRange(block, blockStartOffset, blockEndOffset, result);
+			}
+
+			currentIndex = blockEndIndex;
+
+			// 이미 필요한 범위를 모두 디코딩했으면 종료
+			if (currentIndex >= endIndex)
+				break;
+		}
+
 		integers = result;
 	}
 
@@ -354,10 +547,14 @@ public static class BlockedInteger
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private static UInt64 BuildAscendingBitmapBits(List<Int64> buffer, Int64 first)
 	{
+		// buffer[1..n]의 각 값에 대해, (value - first - 1) 위치의 비트 설정
+		// 예: buffer = [0, 5, 10], first = 0
+		//     → bits |= 1 << 4, 1 << 9  (positions 4, 9)
 		UInt64 bits = 0UL;
 		for (Int32 i = 1; i < buffer.Count; ++i)
 		{
-			bits |= 1UL << (Int32)(buffer[i] - first - 1);
+			Int32 bitPos = (Int32)(buffer[i] - first - 1);
+			bits |= 1UL << bitPos;
 		}
 		return bits;
 	}
@@ -365,10 +562,14 @@ public static class BlockedInteger
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private static UInt64 BuildDescendingBitmapBits(List<Int64> buffer, Int64 first)
 	{
+		// buffer[1..n]의 각 값에 대해, (first - value - 1) 위치의 비트 설정
+		// 예: buffer = [12, 10, 8], first = 12
+		//     → bits |= 1 << 1, 1 << 3  (positions 1, 3)
 		UInt64 bits = 0UL;
 		for (Int32 i = 1; i < buffer.Count; ++i)
 		{
-			bits |= 1UL << (Int32)(first - buffer[i] - 1);
+			Int32 bitPos = (Int32)(first - buffer[i] - 1);
+			bits |= 1UL << bitPos;
 		}
 		return bits;
 	}
@@ -527,10 +728,14 @@ public static class BlockedInteger
 
 		if (block.Bits > 0)
 		{
-			Int32 highestBit = 63 - BitOperations.LeadingZeroCount(block.Bits);
-			if (highestBit >= BitmapBlockRange)
+			// highestBitPosition은 설정된 최상위 비트의 위치 (0-62)
+			// rangeSpan = highestBitPosition + 1은 필요한 범위 (1-63)
+			Int32 highestBitPosition = 63 - BitOperations.LeadingZeroCount(block.Bits);
+			Int32 rangeSpan = highestBitPosition + 1;
+
+			if (rangeSpan > BitmapBlockRange)
 			{
-				errors.Add($"Block[{blockIndex}] (AscendingBitmap): 범위는 {BitmapBlockRange} 이하여야 함 (현재 최대: {highestBit + 1})");
+				errors.Add($"Block[{blockIndex}] (AscendingBitmap): 범위는 {BitmapBlockRange} 이하여야 함 (현재: {rangeSpan})");
 			}
 		}
 	}
@@ -576,10 +781,14 @@ public static class BlockedInteger
 
 		if (block.Bits > 0)
 		{
-			Int32 highestBit = 63 - BitOperations.LeadingZeroCount(block.Bits);
-			if (highestBit >= BitmapBlockRange)
+			// highestBitPosition은 설정된 최상위 비트의 위치 (0-62)
+			// rangeSpan = highestBitPosition + 1은 필요한 범위 (1-63)
+			Int32 highestBitPosition = 63 - BitOperations.LeadingZeroCount(block.Bits);
+			Int32 rangeSpan = highestBitPosition + 1;
+
+			if (rangeSpan > BitmapBlockRange)
 			{
-				errors.Add($"Block[{blockIndex}] (DescendingBitmap): 범위는 {BitmapBlockRange} 이하여야 함 (현재 최대: {highestBit + 1})");
+				errors.Add($"Block[{blockIndex}] (DescendingBitmap): 범위는 {BitmapBlockRange} 이하여야 함 (현재: {rangeSpan})");
 			}
 		}
 	}

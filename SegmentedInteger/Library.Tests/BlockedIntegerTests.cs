@@ -1208,4 +1208,344 @@ public class BlockedIntegerTests
 			BlockedInteger.GetCompressionStatistics(null!, out _);
 		}).Throws<ArgumentNullException>();
 	}
+
+	// ─── DecodeRange ───
+
+	[Test]
+	public async Task DecodeRange_FullRange()
+	{
+		// 전체 범위 디코딩 (Decode와 동일한 결과)
+		Int64[] input = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 0, 10, out var result);
+
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+	}
+
+	[Test]
+	public async Task DecodeRange_PartialRange_Start()
+	{
+		// 시작부터 중간까지
+		Int64[] input = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 0, 5, out var result);
+
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { 1, 2, 3, 4, 5 });
+	}
+
+	[Test]
+	public async Task DecodeRange_PartialRange_Middle()
+	{
+		// 중간 부분만
+		Int64[] input = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 3, 7, out var result);
+
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { 4, 5, 6, 7 });
+	}
+
+	[Test]
+	public async Task DecodeRange_PartialRange_End()
+	{
+		// 중간부터 끝까지
+		Int64[] input = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 5, 10, out var result);
+
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { 6, 7, 8, 9, 10 });
+	}
+
+	[Test]
+	public async Task DecodeRange_SingleValue()
+	{
+		// 단일 값 (startIndex = endIndex - 1)
+		Int64[] input = [1, 2, 3, 4, 5];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 2, 3, out var result);
+
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { 3 });
+	}
+
+	[Test]
+	public async Task DecodeRange_EmptyRange()
+	{
+		// 빈 범위 (0개 값)
+		Int64[] input = [1, 2, 3, 4, 5];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 2, 2, out var result);
+
+		await Assert.That(result).IsEmpty();
+	}
+
+	[Test]
+	public async Task DecodeRange_InvalidRange_ThrowsArgumentException()
+	{
+		// startIndex >= endIndex → ArgumentException
+		Int64[] input = [1, 2, 3];
+		BlockedInteger.Encode(input, out var proto);
+
+		await Assert.That(() =>
+		{
+			BlockedInteger.DecodeRange(proto, 5, 3, out _);
+		}).Throws<ArgumentException>();
+	}
+
+	[Test]
+	public async Task DecodeRange_NullProto_ThrowsArgumentNullException()
+	{
+		// null proto → ArgumentNullException
+		await Assert.That(() =>
+		{
+			BlockedInteger.DecodeRange(null!, 0, 5, out _);
+		}).Throws<ArgumentNullException>();
+	}
+
+	[Test]
+	public async Task DecodeRange_ConstantBlock_FullBlock()
+	{
+		// ConstantBlock 전체 범위
+		Int64[] input = new Int64[20];
+		Array.Fill(input, 42L);
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 0, 20, out var result);
+
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+	}
+
+	[Test]
+	public async Task DecodeRange_ConstantBlock_PartialRange()
+	{
+		// ConstantBlock 부분 범위
+		Int64[] input = new Int64[20];
+		Array.Fill(input, 42L);
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 5, 15, out var result);
+
+		var expected = new Int64[10];
+		Array.Fill(expected, 42L);
+		await Assert.That(result).IsEquivalentTo(expected.ToList());
+	}
+
+	[Test]
+	public async Task DecodeRange_ArithmeticBlock_FullBlock()
+	{
+		// ArithmeticBlock 전체 범위
+		Int64[] input = [0, 3, 6, 9, 12, 15];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 0, 6, out var result);
+
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+	}
+
+	[Test]
+	public async Task DecodeRange_ArithmeticBlock_PartialRange()
+	{
+		// ArithmeticBlock 부분 범위
+		Int64[] input = [0, 3, 6, 9, 12, 15];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 2, 5, out var result);
+
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { 6, 9, 12 });
+	}
+
+	[Test]
+	public async Task DecodeRange_AscendingBitmapBlock_FullBlock()
+	{
+		// AscendingBitmapBlock 전체 범위
+		Int64[] input = [1, 3, 5, 8, 12, 20, 35, 45, 55, 60];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 0, 10, out var result);
+
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+	}
+
+	[Test]
+	public async Task DecodeRange_AscendingBitmapBlock_PartialRange()
+	{
+		// AscendingBitmapBlock 부분 범위
+		Int64[] input = [1, 3, 5, 8, 12, 20, 35, 45, 55, 60];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 2, 7, out var result);
+
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { 5, 8, 12, 20, 35 });
+	}
+
+	[Test]
+	public async Task DecodeRange_DeltaBlock_FullBlock()
+	{
+		// DeltaBlock 전체 범위
+		Int64[] input = [-10, 20, 5, -5, 15, -8, 12, -3, 8, 18];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 0, 10, out var result);
+
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+	}
+
+	[Test]
+	public async Task DecodeRange_DeltaBlock_PartialRange()
+	{
+		// DeltaBlock 부분 범위
+		Int64[] input = [-10, 20, 5, -5, 15, -8, 12, -3, 8, 18];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 3, 7, out var result);
+
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { -5, 15, -8, 12 });
+	}
+
+	[Test]
+	public async Task DecodeRange_LargeSequence_PartialRange()
+	{
+		// 큰 시퀀스에서 부분 범위만 추출
+		Int64[] input = new Int64[10000];
+		for (Int64 i = 0; i < input.Length; ++i) input[i] = i * 2;
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 5000, 5010, out var result);
+
+		var expected = new List<Int64>();
+		for (int i = 5000; i < 5010; i++) expected.Add(i * 2);
+		await Assert.That(result).IsEquivalentTo(expected);
+	}
+
+	[Test]
+	public async Task DecodeRange_MultipleBlocks_CrossingBoundary()
+	{
+		// 여러 블록에 걸친 범위 추출
+		var input = new List<Int64>();
+
+		// Constant 블록: 20개 (인덱스 0-19)
+		for (int i = 0; i < 20; i++) input.Add(100);
+
+		// Arithmetic 블록: 10개 (인덱스 20-29)
+		for (int i = 0; i < 10; i++) input.Add(i * 10);
+
+		BlockedInteger.Encode(input, out var proto);
+
+		// 첫 블록의 마지막 5개 + 두 번째 블록의 처음 5개
+		BlockedInteger.DecodeRange(proto, 15, 25, out var result);
+
+		var expected = new List<Int64>();
+		for (int i = 0; i < 5; i++) expected.Add(100);
+		for (int i = 0; i < 5; i++) expected.Add(i * 10);
+
+		await Assert.That(result).IsEquivalentTo(expected);
+	}
+
+	[Test]
+	public async Task DecodeRange_OutOfBoundsRange_AdjustsAutomatically()
+	{
+		// 범위가 시퀀스 크기를 초과하면 자동으로 조정
+		Int64[] input = [1, 2, 3, 4, 5];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 2, 100, out var result);
+
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { 3, 4, 5 });
+	}
+
+	[Test]
+	public async Task DecodeRange_AscendingBlock_FullBlock()
+	{
+		// AscendingBlock (Bitmap이 아닌 일반 Ascending) 전체 범위
+		Int64[] input = [0, 1, 3, 6, 10, 15, 21, 28, 36, 45];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 0, 10, out var result);
+
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+	}
+
+	[Test]
+	public async Task DecodeRange_AscendingBlock_PartialRange()
+	{
+		// AscendingBlock (Bitmap이 아닌 일반 Ascending) 부분 범위
+		Int64[] input = [0, 1, 3, 6, 10, 15, 21, 28, 36, 45];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 3, 8, out var result);
+
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { 6, 10, 15, 21, 28 });
+	}
+
+	[Test]
+	public async Task DecodeRange_DescendingBlock_PartialRange()
+	{
+		// DescendingBlock 부분 범위 (단조 감소)
+		Int64[] input = [45, 36, 28, 21, 15, 10, 6, 3, 1, 0];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodeRange(proto, 2, 6, out var result);
+
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { 28, 21, 15, 10 });
+	}
+
+	[Test]
+	public async Task CompressionStatistics_AscendingBlock()
+	{
+		// AscendingBlock (Bitmap이 아닌 일반 Ascending) 통계
+		// Ascending: 단조증가하지만 등차수열 아님, count < 10
+		Int64[] input = [0, 1, 3, 6];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.GetCompressionStatistics(proto, out var stats);
+
+		await Assert.That(stats.TotalValues).IsEqualTo(4);
+		await Assert.That(stats.BlockTypeDistribution).ContainsKey("Ascending");
+		await Assert.That(stats.BlockTypeDistribution["Ascending"]).IsEqualTo(1);
+	}
+
+	[Test]
+	public async Task CompressionStatistics_DescendingBlock()
+	{
+		// DescendingBlock (Bitmap이 아닌 일반 Descending) 통계
+		// Descending: 단조감소하지만 등차수열 아님, count < 10
+		Int64[] input = [100, 95, 85, 70];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.GetCompressionStatistics(proto, out var stats);
+
+		await Assert.That(stats.TotalValues).IsEqualTo(4);
+		await Assert.That(stats.BlockTypeDistribution).ContainsKey("Descending");
+		await Assert.That(stats.BlockTypeDistribution["Descending"]).IsEqualTo(1);
+	}
+
+	[Test]
+	public async Task ValidateIntegrity_DescendingBitmapBlock_Valid()
+	{
+		// DescendingBitmapBlock 유효성 검증
+		Int64[] input = [60, 55, 45, 35, 20, 12, 8, 5, 3, 1];
+		BlockedInteger.Encode(input, out var proto);
+
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+
+		await Assert.That(isValid).IsTrue();
+		await Assert.That(errors).IsEmpty();
+	}
+
+	[Test]
+	public async Task ValidateIntegrity_AscendingBlock_Valid()
+	{
+		// AscendingBlock (Bitmap이 아닌 일반) 유효성 검증
+		Int64[] input = [0, 1, 3, 6, 10, 15, 21, 28, 36, 45];
+		BlockedInteger.Encode(input, out var proto);
+
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+
+		await Assert.That(isValid).IsTrue();
+		await Assert.That(errors).IsEmpty();
+	}
 }
