@@ -1,19 +1,18 @@
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
-using System.Collections.Generic;
 
 namespace Library.SegmentedIntegers;
 
-using PbBlockedInteger = Pb.BlockedInteger;
-using PbBlock = Pb.BlockedInteger.Types.Block;
-using PbConstantBlock = Pb.BlockedInteger.Types.Block.Types.ConstantBlock;
 using PbArithmeticBlock = Pb.BlockedInteger.Types.Block.Types.ArithmeticBlock;
 using PbAscendingBitmapBlock = Pb.BlockedInteger.Types.Block.Types.AscendingBitmapBlock;
 using PbAscendingBlock = Pb.BlockedInteger.Types.Block.Types.AscendingBlock;
+using PbBlock = Pb.BlockedInteger.Types.Block;
+using PbBlockedInteger = Pb.BlockedInteger;
+using PbConstantBlock = Pb.BlockedInteger.Types.Block.Types.ConstantBlock;
+using PbDeltaBlock = Pb.BlockedInteger.Types.Block.Types.DeltaBlock;
 using PbDescendingBitmapBlock = Pb.BlockedInteger.Types.Block.Types.DescendingBitmapBlock;
 using PbDescendingBlock = Pb.BlockedInteger.Types.Block.Types.DescendingBlock;
-using PbDeltaBlock = Pb.BlockedInteger.Types.Block.Types.DeltaBlock;
 
 /// <summary>
 /// Int64 시퀀스 압축의 통계 정보.
@@ -200,7 +199,8 @@ public static class BlockedInteger
 		}
 	}
 
-	private static void DecodeBlockRange(PbBlock block, Int32 startOffset, Int32 endOffset, List<Int64> output)
+	private static void DecodeBlockRange(PbBlock block,
+		Int32 startOffset, Int32 endOffset, List<Int64> output)
 	{
 		switch (block.BlockOneofCase)
 		{
@@ -234,7 +234,8 @@ public static class BlockedInteger
 		}
 	}
 
-	private static void DecodeConstantRange(PbConstantBlock block, Int32 startOffset, Int32 endOffset, List<Int64> output)
+	private static void DecodeConstantRange(PbConstantBlock block,
+		Int32 startOffset, Int32 endOffset, List<Int64> output)
 	{
 		for (Int32 i = startOffset; i < endOffset; ++i)
 		{
@@ -242,7 +243,8 @@ public static class BlockedInteger
 		}
 	}
 
-	private static void DecodeArithmeticRange(PbArithmeticBlock block, Int32 startOffset, Int32 endOffset, List<Int64> output)
+	private static void DecodeArithmeticRange(PbArithmeticBlock block,
+		Int32 startOffset, Int32 endOffset, List<Int64> output)
 	{
 		Int64 current = unchecked(block.First + (Int64)startOffset * block.Step);
 		for (Int32 i = startOffset; i < endOffset; ++i)
@@ -252,7 +254,8 @@ public static class BlockedInteger
 		}
 	}
 
-	private static void DecodeAscendingBitmapRange(PbAscendingBitmapBlock block, Int32 startOffset, Int32 endOffset, List<Int64> output)
+	private static void DecodeAscendingBitmapRange(PbAscendingBitmapBlock block,
+		Int32 startOffset, Int32 endOffset, List<Int64> output)
 	{
 		Int64 first = block.First;
 		Int32 currentPos = 0;
@@ -286,7 +289,8 @@ public static class BlockedInteger
 		}
 	}
 
-	private static void DecodeAscendingRange(PbAscendingBlock block, Int32 startOffset, Int32 endOffset, List<Int64> output)
+	private static void DecodeAscendingRange(PbAscendingBlock block,
+		Int32 startOffset, Int32 endOffset, List<Int64> output)
 	{
 		if (startOffset == 0)
 		{
@@ -304,7 +308,8 @@ public static class BlockedInteger
 		}
 	}
 
-	private static void DecodeDescendingBitmapRange(PbDescendingBitmapBlock block, Int32 startOffset, Int32 endOffset, List<Int64> output)
+	private static void DecodeDescendingBitmapRange(PbDescendingBitmapBlock block,
+		Int32 startOffset, Int32 endOffset, List<Int64> output)
 	{
 		Int64 first = block.First;
 		Int32 currentPos = 0;
@@ -338,7 +343,8 @@ public static class BlockedInteger
 		}
 	}
 
-	private static void DecodeDescendingRange(PbDescendingBlock block, Int32 startOffset, Int32 endOffset, List<Int64> output)
+	private static void DecodeDescendingRange(PbDescendingBlock block,
+		Int32 startOffset, Int32 endOffset, List<Int64> output)
 	{
 		if (startOffset == 0)
 		{
@@ -356,7 +362,8 @@ public static class BlockedInteger
 		}
 	}
 
-	private static void DecodeDeltaRange(PbDeltaBlock block, Int32 startOffset, Int32 endOffset, List<Int64> output)
+	private static void DecodeDeltaRange(PbDeltaBlock block,
+		Int32 startOffset, Int32 endOffset, List<Int64> output)
 	{
 		for (Int32 i = startOffset; i < endOffset && i < block.Deltas.Count; ++i)
 		{
@@ -386,6 +393,7 @@ public static class BlockedInteger
 	{
 		ArgumentNullException.ThrowIfNull(proto);
 		List<Int64> result = [];
+
 		foreach (PbBlock block in proto.Blocks)
 		{
 			switch (block.BlockOneofCase)
@@ -432,11 +440,13 @@ public static class BlockedInteger
 	/// </remarks>
 	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
 	/// <exception cref="ArgumentException">startIndex &gt; endIndex인 경우</exception>
-	public static void DecodeRange(PbBlockedInteger proto, Int32 startIndex, Int32 endIndex, out IReadOnlyList<Int64> integers)
+	public static void DecodeRange(PbBlockedInteger proto,
+		Int32 startIndex, Int32 endIndex, out IReadOnlyList<Int64> integers)
 	{
 		ArgumentNullException.ThrowIfNull(proto);
 		if (startIndex > endIndex)
-			throw new ArgumentException($"startIndex ({startIndex}) must be <= endIndex ({endIndex})", nameof(startIndex));
+			throw new ArgumentException(
+				$"startIndex ({startIndex}) must be <= endIndex ({endIndex})", nameof(startIndex));
 
 		List<Int64> result = [];
 		Int32 currentIndex = 0;
@@ -674,7 +684,8 @@ public static class BlockedInteger
 		}
 	}
 
-	private static void ValidateConstantBlock(PbConstantBlock block, Int32 blockIndex, List<string> errors)
+	private static void ValidateConstantBlock(PbConstantBlock block,
+		Int32 blockIndex, List<string> errors)
 	{
 		if (block is null)
 		{
@@ -689,11 +700,13 @@ public static class BlockedInteger
 
 		if (block.Count > MaxBlockValues)
 		{
-			errors.Add($"Block[{blockIndex}] (Constant): Count는 {MaxBlockValues} 이하여야 함 (현재: {block.Count})");
+			errors.Add($"Block[{blockIndex}] (Constant): Count는 {MaxBlockValues} 이하여야 함" +
+				$" (현재: {block.Count})");
 		}
 	}
 
-	private static void ValidateArithmeticBlock(PbArithmeticBlock block, Int32 blockIndex, List<string> errors)
+	private static void ValidateArithmeticBlock(PbArithmeticBlock block,
+		Int32 blockIndex, List<string> errors)
 	{
 		if (block is null)
 		{
@@ -708,11 +721,14 @@ public static class BlockedInteger
 
 		if (block.Count > MaxBlockValues)
 		{
-			errors.Add($"Block[{blockIndex}] (Arithmetic): Count는 {MaxBlockValues} 이하여야 함 (현재: {block.Count})");
+			errors.Add(
+				$"Block[{blockIndex}] (Arithmetic): Count는 {MaxBlockValues} 이하여야 함" +
+				$" (현재: {block.Count})");
 		}
 	}
 
-	private static void ValidateAscendingBitmapBlock(PbAscendingBitmapBlock block, Int32 blockIndex, List<string> errors)
+	private static void ValidateAscendingBitmapBlock(PbAscendingBitmapBlock block,
+		Int32 blockIndex, List<string> errors)
 	{
 		if (block is null)
 		{
@@ -723,7 +739,8 @@ public static class BlockedInteger
 		Int32 setBitCount = BitOperations.PopCount(block.Bits) + 1;
 		if (setBitCount < BitmapBlockMinCount)
 		{
-			errors.Add($"Block[{blockIndex}] (AscendingBitmap): 최소 {BitmapBlockMinCount}개 값 필요 (현재: {setBitCount})");
+			errors.Add($"Block[{blockIndex}] (AscendingBitmap): 최소 {BitmapBlockMinCount}개 값 필요" +
+				$" (현재: {setBitCount})");
 		}
 
 		if (block.Bits > 0)
@@ -735,12 +752,15 @@ public static class BlockedInteger
 
 			if (rangeSpan > BitmapBlockRange)
 			{
-				errors.Add($"Block[{blockIndex}] (AscendingBitmap): 범위는 {BitmapBlockRange} 이하여야 함 (현재: {rangeSpan})");
+				errors.Add(
+					$"Block[{blockIndex}] (AscendingBitmap): 범위는 {BitmapBlockRange} 이하여야 함" +
+					$" (현재: {rangeSpan})");
 			}
 		}
 	}
 
-	private static void ValidateAscendingBlock(PbAscendingBlock block, Int32 blockIndex, List<string> errors)
+	private static void ValidateAscendingBlock(PbAscendingBlock block,
+		Int32 blockIndex, List<string> errors)
 	{
 		if (block is null)
 		{
@@ -756,16 +776,19 @@ public static class BlockedInteger
 
 		if (totalCount > MaxBlockValues)
 		{
-			errors.Add($"Block[{blockIndex}] (Ascending): 최대 {MaxBlockValues}개 값 허용 (현재: {totalCount})");
+			errors.Add($"Block[{blockIndex}] (Ascending): 최대 {MaxBlockValues}개 값 허용" +
+				$" (현재: {totalCount})");
 		}
 
 		if (block.Diffs.Count > MaxBlockValues)
 		{
-			errors.Add($"Block[{blockIndex}] (Ascending): Diffs는 {MaxBlockValues}개 이하여야 함 (현재: {block.Diffs.Count})");
+			errors.Add($"Block[{blockIndex}] (Ascending): Diffs는 {MaxBlockValues}개 이하여야 함" +
+				$" (현재: {block.Diffs.Count})");
 		}
 	}
 
-	private static void ValidateDescendingBitmapBlock(PbDescendingBitmapBlock block, Int32 blockIndex, List<string> errors)
+	private static void ValidateDescendingBitmapBlock(PbDescendingBitmapBlock block,
+		Int32 blockIndex, List<string> errors)
 	{
 		if (block is null)
 		{
@@ -776,7 +799,8 @@ public static class BlockedInteger
 		Int32 setBitCount = BitOperations.PopCount(block.Bits) + 1;
 		if (setBitCount < BitmapBlockMinCount)
 		{
-			errors.Add($"Block[{blockIndex}] (DescendingBitmap): 최소 {BitmapBlockMinCount}개 값 필요 (현재: {setBitCount})");
+			errors.Add($"Block[{blockIndex}] (DescendingBitmap): 최소 {BitmapBlockMinCount}개 값 필요" +
+				$" (현재: {setBitCount})");
 		}
 
 		if (block.Bits > 0)
@@ -788,12 +812,14 @@ public static class BlockedInteger
 
 			if (rangeSpan > BitmapBlockRange)
 			{
-				errors.Add($"Block[{blockIndex}] (DescendingBitmap): 범위는 {BitmapBlockRange} 이하여야 함 (현재: {rangeSpan})");
+				errors.Add($"Block[{blockIndex}] (DescendingBitmap): 범위는 {BitmapBlockRange} 이하여야 함" +
+					$" (현재: {rangeSpan})");
 			}
 		}
 	}
 
-	private static void ValidateDescendingBlock(PbDescendingBlock block, Int32 blockIndex, List<string> errors)
+	private static void ValidateDescendingBlock(PbDescendingBlock block,
+		Int32 blockIndex, List<string> errors)
 	{
 		if (block is null)
 		{
@@ -809,12 +835,14 @@ public static class BlockedInteger
 
 		if (totalCount > MaxBlockValues)
 		{
-			errors.Add($"Block[{blockIndex}] (Descending): 최대 {MaxBlockValues}개 값 허용 (현재: {totalCount})");
+			errors.Add($"Block[{blockIndex}] (Descending): 최대 {MaxBlockValues}개 값 허용" +
+				$" (현재: {totalCount})");
 		}
 
 		if (block.Diffs.Count > MaxBlockValues)
 		{
-			errors.Add($"Block[{blockIndex}] (Descending): Diffs는 {MaxBlockValues}개 이하여야 함 (현재: {block.Diffs.Count})");
+			errors.Add($"Block[{blockIndex}] (Descending): Diffs는 {MaxBlockValues}개 이하여야 함" +
+				$" (현재: {block.Diffs.Count})");
 		}
 	}
 
@@ -828,13 +856,15 @@ public static class BlockedInteger
 
 		if (block.Deltas.Count < 1)
 		{
-			errors.Add($"Block[{blockIndex}] (Delta): Deltas는 1개 이상이어야 함 (현재: {block.Deltas.Count})");
+			errors.Add($"Block[{blockIndex}] (Delta): Deltas는 1개 이상이어야 함" +
+				$" (현재: {block.Deltas.Count})");
 			return;
 		}
 
 		if (block.Deltas.Count > MaxBlockValues)
 		{
-			errors.Add($"Block[{blockIndex}] (Delta): Deltas는 {MaxBlockValues}개 이하여야 함 (현재: {block.Deltas.Count})");
+			errors.Add($"Block[{blockIndex}] (Delta): Deltas는 {MaxBlockValues}개 이하여야 함" +
+				$" (현재: {block.Deltas.Count})");
 		}
 
 		Int64 min = Int64.MaxValue;
@@ -849,7 +879,8 @@ public static class BlockedInteger
 
 		if (unchecked((UInt64)(max - min)) > (UInt64)DeltaBlockMax)
 		{
-			errors.Add($"Block[{blockIndex}] (Delta): 범위는 {DeltaBlockMax} 이하여야 함 (현재: {max - min})");
+			errors.Add($"Block[{blockIndex}] (Delta): 범위는 {DeltaBlockMax} 이하여야 함" +
+				$" (현재: {max - min})");
 		}
 	}
 
