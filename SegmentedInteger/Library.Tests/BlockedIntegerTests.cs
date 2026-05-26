@@ -1339,125 +1339,101 @@ public class BlockedIntegerTests
 		}).Throws<ArgumentNullException>();
 	}
 
-	// ─── DecodeRange ───
+	// ─── DecodePage ───
 
 	[Test]
-	public async Task DecodeRange_FullRange()
+	public async Task DecodePage_FirstPage()
 	{
-		// 전체 범위 디코딩 (Decode와 동일한 결과)
+		// 첫 번째 페이지 (pageIndex=0)
 		Int64[] input = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.DecodeRange(proto, 0, 10, out var result);
+		BlockedInteger.DecodePage(proto, 0, 3, out var result);
 
-		await Assert.That(result).IsEquivalentTo(input.ToList());
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { 1, 2, 3 });
 	}
 
 	[Test]
-	public async Task DecodeRange_PartialRange_Start()
+	public async Task DecodePage_SecondPage()
 	{
-		// 시작부터 중간까지
+		// 두 번째 페이지 (pageIndex=1)
 		Int64[] input = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.DecodeRange(proto, 0, 5, out var result);
+		BlockedInteger.DecodePage(proto, 1, 3, out var result);
 
-		await Assert.That(result).IsEquivalentTo(new List<Int64> { 1, 2, 3, 4, 5 });
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { 4, 5, 6 });
 	}
 
 	[Test]
-	public async Task DecodeRange_PartialRange_Middle()
+	public async Task DecodePage_LastPage_PartialFill()
 	{
-		// 중간 부분만
-		Int64[] input = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-		BlockedInteger.Encode(input, out var proto);
-
-		BlockedInteger.DecodeRange(proto, 3, 7, out var result);
-
-		await Assert.That(result).IsEquivalentTo(new List<Int64> { 4, 5, 6, 7 });
-	}
-
-	[Test]
-	public async Task DecodeRange_PartialRange_End()
-	{
-		// 중간부터 끝까지
-		Int64[] input = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-		BlockedInteger.Encode(input, out var proto);
-
-		BlockedInteger.DecodeRange(proto, 5, 10, out var result);
-
-		await Assert.That(result).IsEquivalentTo(new List<Int64> { 6, 7, 8, 9, 10 });
-	}
-
-	[Test]
-	public async Task DecodeRange_SingleValue()
-	{
-		// 단일 값 (startIndex = endIndex - 1)
+		// 마지막 페이지 (데이터가 pageSize보다 적음)
 		Int64[] input = [1, 2, 3, 4, 5];
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.DecodeRange(proto, 2, 3, out var result);
+		BlockedInteger.DecodePage(proto, 1, 3, out var result);
 
-		await Assert.That(result).IsEquivalentTo(new List<Int64> { 3 });
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { 4, 5 });
 	}
 
 	[Test]
-	public async Task DecodeRange_EmptyRange()
+	public async Task DecodePage_OutOfBounds_ReturnsEmpty()
 	{
-		// 빈 범위 (0개 값)
+		// pageIndex가 데이터 범위를 초과
 		Int64[] input = [1, 2, 3, 4, 5];
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.DecodeRange(proto, 2, 2, out var result);
+		BlockedInteger.DecodePage(proto, 10, 3, out var result);
 
 		await Assert.That(result).IsEmpty();
 	}
 
 	[Test]
-	public async Task DecodeRange_InvalidRange_ThrowsArgumentException()
+	public async Task DecodePage_InvalidPageIndex_ThrowsArgumentException()
 	{
-		// startIndex >= endIndex → ArgumentException
+		// pageIndex < 0 → ArgumentException
 		Int64[] input = [1, 2, 3];
 		BlockedInteger.Encode(input, out var proto);
 
 		await Assert.That(() =>
 		{
-			BlockedInteger.DecodeRange(proto, 5, 3, out _);
+			BlockedInteger.DecodePage(proto, -1, 3, out _);
 		}).Throws<ArgumentException>();
 	}
 
 	[Test]
-	public async Task DecodeRange_NullProto_ThrowsArgumentNullException()
+	public async Task DecodePage_InvalidPageSize_ThrowsArgumentException()
+	{
+		// pageSize <= 0 → ArgumentException
+		Int64[] input = [1, 2, 3];
+		BlockedInteger.Encode(input, out var proto);
+
+		await Assert.That(() =>
+		{
+			BlockedInteger.DecodePage(proto, 0, 0, out _);
+		}).Throws<ArgumentException>();
+	}
+
+	[Test]
+	public async Task DecodePage_NullProto_ThrowsArgumentNullException()
 	{
 		// null proto → ArgumentNullException
 		await Assert.That(() =>
 		{
-			BlockedInteger.DecodeRange(null!, 0, 5, out _);
+			BlockedInteger.DecodePage(null!, 0, 5, out _);
 		}).Throws<ArgumentNullException>();
 	}
 
 	[Test]
-	public async Task DecodeRange_ConstantBlock_FullBlock()
+	public async Task DecodePage_ConstantBlock_FullPage()
 	{
-		// ConstantBlock 전체 범위
+		// ConstantBlock, 정확히 한 페이지
 		Int64[] input = new Int64[20];
 		Array.Fill(input, 42L);
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.DecodeRange(proto, 0, 20, out var result);
-
-		await Assert.That(result).IsEquivalentTo(input.ToList());
-	}
-
-	[Test]
-	public async Task DecodeRange_ConstantBlock_PartialRange()
-	{
-		// ConstantBlock 부분 범위
-		Int64[] input = new Int64[20];
-		Array.Fill(input, 42L);
-		BlockedInteger.Encode(input, out var proto);
-
-		BlockedInteger.DecodeRange(proto, 5, 15, out var result);
+		BlockedInteger.DecodePage(proto, 0, 10, out var result);
 
 		var expected = new Int64[10];
 		Array.Fill(expected, 42L);
@@ -1465,96 +1441,111 @@ public class BlockedIntegerTests
 	}
 
 	[Test]
-	public async Task DecodeRange_ArithmeticBlock_FullBlock()
+	public async Task DecodePage_ConstantBlock_PartialPage()
 	{
-		// ArithmeticBlock 전체 범위
+		// ConstantBlock 부분 페이지
+		Int64[] input = new Int64[20];
+		Array.Fill(input, 42L);
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodePage(proto, 1, 10, out var result);
+
+		var expected = new Int64[10];
+		Array.Fill(expected, 42L);
+		await Assert.That(result).IsEquivalentTo(expected.ToList());
+	}
+
+	[Test]
+	public async Task DecodePage_ArithmeticBlock_FullPage()
+	{
+		// ArithmeticBlock 전체 페이지
 		Int64[] input = [0, 3, 6, 9, 12, 15];
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.DecodeRange(proto, 0, 6, out var result);
+		BlockedInteger.DecodePage(proto, 0, 6, out var result);
 
 		await Assert.That(result).IsEquivalentTo(input.ToList());
 	}
 
 	[Test]
-	public async Task DecodeRange_ArithmeticBlock_PartialRange()
+	public async Task DecodePage_ArithmeticBlock_PartialPage()
 	{
-		// ArithmeticBlock 부분 범위
+		// ArithmeticBlock 부분 페이지
 		Int64[] input = [0, 3, 6, 9, 12, 15];
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.DecodeRange(proto, 2, 5, out var result);
+		BlockedInteger.DecodePage(proto, 0, 3, out var result);
 
-		await Assert.That(result).IsEquivalentTo(new List<Int64> { 6, 9, 12 });
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { 0, 3, 6 });
 	}
 
 	[Test]
-	public async Task DecodeRange_AscendingBitmapBlock_FullBlock()
+	public async Task DecodePage_AscendingBitmapBlock_PartialPage()
 	{
-		// AscendingBitmapBlock 전체 범위
+		// AscendingBitmapBlock 부분 페이지
 		Int64[] input = [1, 3, 5, 8, 12, 20, 35, 45, 55, 60];
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.DecodeRange(proto, 0, 10, out var result);
+		BlockedInteger.DecodePage(proto, 0, 5, out var result);
 
-		await Assert.That(result).IsEquivalentTo(input.ToList());
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { 1, 3, 5, 8, 12 });
 	}
 
 	[Test]
-	public async Task DecodeRange_AscendingBitmapBlock_PartialRange()
+	public async Task DecodePage_AscendingBlock_PartialPage()
 	{
-		// AscendingBitmapBlock 부분 범위
-		Int64[] input = [1, 3, 5, 8, 12, 20, 35, 45, 55, 60];
+		// AscendingBlock (Bitmap이 아닌 일반) 부분 페이지
+		Int64[] input = [0, 1, 3, 6, 10, 15, 21, 28, 36, 45];
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.DecodeRange(proto, 2, 7, out var result);
+		BlockedInteger.DecodePage(proto, 0, 5, out var result);
 
-		await Assert.That(result).IsEquivalentTo(new List<Int64> { 5, 8, 12, 20, 35 });
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { 0, 1, 3, 6, 10 });
 	}
 
 	[Test]
-	public async Task DecodeRange_DeltaBlock_FullBlock()
+	public async Task DecodePage_DescendingBlock_PartialPage()
 	{
-		// DeltaBlock 전체 범위
+		// DescendingBlock 부분 페이지 (단조 감소)
+		Int64[] input = [45, 36, 28, 21, 15, 10, 6, 3, 1, 0];
+		BlockedInteger.Encode(input, out var proto);
+
+		BlockedInteger.DecodePage(proto, 0, 5, out var result);
+
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { 45, 36, 28, 21, 15 });
+	}
+
+	[Test]
+	public async Task DecodePage_DeltaBlock_PartialPage()
+	{
+		// DeltaBlock 부분 페이지
 		Int64[] input = [-10, 20, 5, -5, 15, -8, 12, -3, 8, 18];
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.DecodeRange(proto, 0, 10, out var result);
+		BlockedInteger.DecodePage(proto, 0, 5, out var result);
 
-		await Assert.That(result).IsEquivalentTo(input.ToList());
+		await Assert.That(result).IsEquivalentTo(new List<Int64> { -10, 20, 5, -5, 15 });
 	}
 
 	[Test]
-	public async Task DecodeRange_DeltaBlock_PartialRange()
+	public async Task DecodePage_LargeSequence_MiddlePage()
 	{
-		// DeltaBlock 부분 범위
-		Int64[] input = [-10, 20, 5, -5, 15, -8, 12, -3, 8, 18];
-		BlockedInteger.Encode(input, out var proto);
-
-		BlockedInteger.DecodeRange(proto, 3, 7, out var result);
-
-		await Assert.That(result).IsEquivalentTo(new List<Int64> { -5, 15, -8, 12 });
-	}
-
-	[Test]
-	public async Task DecodeRange_LargeSequence_PartialRange()
-	{
-		// 큰 시퀀스에서 부분 범위만 추출
+		// 큰 시퀀스에서 중간 페이지 추출
 		Int64[] input = new Int64[10000];
 		for (Int64 i = 0; i < input.Length; ++i) input[i] = i * 2;
 		BlockedInteger.Encode(input, out var proto);
 
-		BlockedInteger.DecodeRange(proto, 5000, 5010, out var result);
+		BlockedInteger.DecodePage(proto, 2, 5, out var result);
 
 		var expected = new List<Int64>();
-		for (int i = 5000; i < 5010; i++) expected.Add(i * 2);
+		for (int i = 10; i < 15; i++) expected.Add(i * 2);
 		await Assert.That(result).IsEquivalentTo(expected);
 	}
 
 	[Test]
-	public async Task DecodeRange_MultipleBlocks_CrossingBoundary()
+	public async Task DecodePage_MultipleBlocks_CrossingBoundary()
 	{
-		// 여러 블록에 걸친 범위 추출
+		// 여러 블록에 걸친 페이지 추출
 		var input = new List<Int64>();
 
 		// Constant 블록: 20개 (인덱스 0-19)
@@ -1565,62 +1556,14 @@ public class BlockedIntegerTests
 
 		BlockedInteger.Encode(input, out var proto);
 
-		// 첫 블록의 마지막 5개 + 두 번째 블록의 처음 5개
-		BlockedInteger.DecodeRange(proto, 15, 25, out var result);
+		// 페이지: 인덱스 15-29 (pageIndex=1, pageSize=15)
+		BlockedInteger.DecodePage(proto, 1, 15, out var result);
 
 		var expected = new List<Int64>();
-		for (int i = 0; i < 5; i++) expected.Add(100);
-		for (int i = 0; i < 5; i++) expected.Add(i * 10);
+		for (int i = 0; i < 5; i++) expected.Add(100);  // 인덱스 15-19
+		for (int i = 0; i < 10; i++) expected.Add(i * 10);  // 인덱스 20-29
 
 		await Assert.That(result).IsEquivalentTo(expected);
-	}
-
-	[Test]
-	public async Task DecodeRange_OutOfBoundsRange_AdjustsAutomatically()
-	{
-		// 범위가 시퀀스 크기를 초과하면 자동으로 조정
-		Int64[] input = [1, 2, 3, 4, 5];
-		BlockedInteger.Encode(input, out var proto);
-
-		BlockedInteger.DecodeRange(proto, 2, 100, out var result);
-
-		await Assert.That(result).IsEquivalentTo(new List<Int64> { 3, 4, 5 });
-	}
-
-	[Test]
-	public async Task DecodeRange_AscendingBlock_FullBlock()
-	{
-		// AscendingBlock (Bitmap이 아닌 일반 Ascending) 전체 범위
-		Int64[] input = [0, 1, 3, 6, 10, 15, 21, 28, 36, 45];
-		BlockedInteger.Encode(input, out var proto);
-
-		BlockedInteger.DecodeRange(proto, 0, 10, out var result);
-
-		await Assert.That(result).IsEquivalentTo(input.ToList());
-	}
-
-	[Test]
-	public async Task DecodeRange_AscendingBlock_PartialRange()
-	{
-		// AscendingBlock (Bitmap이 아닌 일반 Ascending) 부분 범위
-		Int64[] input = [0, 1, 3, 6, 10, 15, 21, 28, 36, 45];
-		BlockedInteger.Encode(input, out var proto);
-
-		BlockedInteger.DecodeRange(proto, 3, 8, out var result);
-
-		await Assert.That(result).IsEquivalentTo(new List<Int64> { 6, 10, 15, 21, 28 });
-	}
-
-	[Test]
-	public async Task DecodeRange_DescendingBlock_PartialRange()
-	{
-		// DescendingBlock 부분 범위 (단조 감소)
-		Int64[] input = [45, 36, 28, 21, 15, 10, 6, 3, 1, 0];
-		BlockedInteger.Encode(input, out var proto);
-
-		BlockedInteger.DecodeRange(proto, 2, 6, out var result);
-
-		await Assert.That(result).IsEquivalentTo(new List<Int64> { 28, 21, 15, 10 });
 	}
 
 	[Test]
@@ -1677,5 +1620,129 @@ public class BlockedIntegerTests
 
 		await Assert.That(isValid).IsTrue();
 		await Assert.That(errors).IsEmpty();
+	}
+
+	// ─── GetPageCount ───
+
+	[Test]
+	public async Task GetPageCount_ExactPages()
+	{
+		// 정확히 떨어지는 페이지 (10개 값, 5개씩 = 2페이지)
+		Int64[] input = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+		BlockedInteger.Encode(input, out var proto);
+
+		Int32 pageCount = BlockedInteger.GetPageCount(proto, 5);
+
+		await Assert.That(pageCount).IsEqualTo(2);
+	}
+
+	[Test]
+	public async Task GetPageCount_PartialLastPage()
+	{
+		// 마지막 페이지가 부분 (10개 값, 3개씩 = 4페이지)
+		Int64[] input = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+		BlockedInteger.Encode(input, out var proto);
+
+		Int32 pageCount = BlockedInteger.GetPageCount(proto, 3);
+
+		await Assert.That(pageCount).IsEqualTo(4);
+	}
+
+	[Test]
+	public async Task GetPageCount_SinglePage()
+	{
+		// 한 페이지 안에 모든 데이터
+		Int64[] input = [1, 2, 3];
+		BlockedInteger.Encode(input, out var proto);
+
+		Int32 pageCount = BlockedInteger.GetPageCount(proto, 10);
+
+		await Assert.That(pageCount).IsEqualTo(1);
+	}
+
+	[Test]
+	public async Task GetPageCount_LargePageSize()
+	{
+		// 매우 큰 페이지 크기
+		Int64[] input = [1, 2, 3, 4, 5];
+		BlockedInteger.Encode(input, out var proto);
+
+		Int32 pageCount = BlockedInteger.GetPageCount(proto, 1000);
+
+		await Assert.That(pageCount).IsEqualTo(1);
+	}
+
+	[Test]
+	public async Task GetPageCount_OneValuePerPage()
+	{
+		// 한 값씩 페이지 분할 (10개 값 = 10페이지)
+		Int64[] input = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+		BlockedInteger.Encode(input, out var proto);
+
+		Int32 pageCount = BlockedInteger.GetPageCount(proto, 1);
+
+		await Assert.That(pageCount).IsEqualTo(10);
+	}
+
+	[Test]
+	public async Task GetPageCount_EmptyProto()
+	{
+		// 빈 프로토 (0개 값)
+		BlockedInteger.Encode([], out var proto);
+
+		Int32 pageCount = BlockedInteger.GetPageCount(proto, 5);
+
+		await Assert.That(pageCount).IsEqualTo(0);
+	}
+
+	[Test]
+	public async Task GetPageCount_NullProto_ThrowsArgumentNullException()
+	{
+		// null proto → ArgumentNullException
+		await Assert.That(() =>
+		{
+			BlockedInteger.GetPageCount(null!, 5);
+		}).Throws<ArgumentNullException>();
+	}
+
+	[Test]
+	public async Task GetPageCount_InvalidPageSize_ThrowsArgumentException()
+	{
+		// pageSize <= 0 → ArgumentException
+		Int64[] input = [1, 2, 3];
+		BlockedInteger.Encode(input, out var proto);
+
+		await Assert.That(() =>
+		{
+			BlockedInteger.GetPageCount(proto, 0);
+		}).Throws<ArgumentException>();
+	}
+
+	[Test]
+	public async Task GetPageCount_LargeSequence()
+	{
+		// 큰 시퀀스 (10,000개 값, 100씩 = 100페이지)
+		Int64[] input = new Int64[10000];
+		for (Int64 i = 0; i < input.Length; ++i) input[i] = i;
+		BlockedInteger.Encode(input, out var proto);
+
+		Int32 pageCount = BlockedInteger.GetPageCount(proto, 100);
+
+		await Assert.That(pageCount).IsEqualTo(100);
+	}
+
+	[Test]
+	public async Task GetPageCount_MultipleBlocks()
+	{
+		// 여러 블록에 걸친 데이터
+		var input = new List<Int64>();
+		for (int i = 0; i < 20; i++) input.Add(100);  // Constant 블록
+		for (int i = 0; i < 10; i++) input.Add(i * 10);  // Arithmetic 블록
+
+		BlockedInteger.Encode(input, out var proto);
+
+		Int32 pageCount = BlockedInteger.GetPageCount(proto, 7);
+
+		await Assert.That(pageCount).IsEqualTo(5);  // 30개 값, 7씩 = 5페이지
 	}
 }

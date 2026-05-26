@@ -112,6 +112,85 @@ public static class BlockedInteger
 	}
 
 	/// <summary>
+	/// 주어진 페이지 크기로 전체 데이터를 나눌 때 필요한 페이지 개수를 반환합니다.
+	/// </summary>
+	/// <param name="proto">분석할 프로토콜 버퍼</param>
+	/// <param name="pageSize">페이지 크기 (값의 개수)</param>
+	/// <returns>필요한 페이지 개수 (데이터가 없으면 0)</returns>
+	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
+	/// <exception cref="ArgumentException">pageSize &lt;= 0인 경우</exception>
+	public static Int32 GetPageCount(PbBlockedInteger proto, Int32 pageSize)
+	{
+		ArgumentNullException.ThrowIfNull(proto);
+		if (pageSize <= 0)
+			throw new ArgumentException(
+				$"pageSize ({pageSize}) must be > 0", nameof(pageSize));
+
+		Int32 totalValueCount = 0;
+		foreach (PbBlock block in proto.Blocks)
+		{
+			totalValueCount += Decoders.GetBlockValueCount(block);
+		}
+
+		if (totalValueCount == 0)
+			return 0;
+
+		return (totalValueCount + pageSize - 1) / pageSize;
+	}
+
+	/// <summary>
+	/// 지정된 페이지의 값들을 디코딩합니다.
+	/// </summary>
+	/// <param name="proto">디코딩할 프로토콜 버퍼</param>
+	/// <param name="pageIndex">0-based 페이지 번호</param>
+	/// <param name="pageSize">페이지 크기 (값의 개수)</param>
+	/// <param name="integers">디코딩된 값 목록</param>
+	/// <remarks>
+	/// pageIndex 범위를 벗어난 경우 빈 결과를 반환합니다.
+	/// Trusted input only.
+	/// </remarks>
+	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
+	/// <exception cref="ArgumentException">pageIndex &lt; 0 또는 pageSize &lt;= 0인 경우</exception>
+	public static void DecodePage(PbBlockedInteger proto,
+		Int32 pageIndex, Int32 pageSize, out IReadOnlyList<Int64> integers)
+	{
+		ArgumentNullException.ThrowIfNull(proto);
+		if (pageIndex < 0)
+			throw new ArgumentException(
+				$"pageIndex ({pageIndex}) must be >= 0", nameof(pageIndex));
+		if (pageSize <= 0)
+			throw new ArgumentException(
+				$"pageSize ({pageSize}) must be > 0", nameof(pageSize));
+
+		Int32 startIndex = pageIndex * pageSize;
+		Int32 endIndex = startIndex + pageSize;
+
+		List<Int64> result = [];
+		Int32 currentIndex = 0;
+
+		foreach (PbBlock block in proto.Blocks)
+		{
+			Int32 blockValueCount = Decoders.GetBlockValueCount(block);
+			Int32 blockEndIndex = currentIndex + blockValueCount;
+
+			if (blockEndIndex > startIndex && currentIndex < endIndex)
+			{
+				Int32 blockStartOffset = Math.Max(0, startIndex - currentIndex);
+				Int32 blockEndOffset = Math.Min(blockValueCount, endIndex - currentIndex);
+
+				Decoders.DecodeBlockPage(block, blockStartOffset, blockEndOffset, result);
+			}
+
+			currentIndex = blockEndIndex;
+
+			if (currentIndex >= endIndex)
+				break;
+		}
+
+		integers = result;
+	}
+
+	/// <summary>
 	/// 블록 구조의 무결성을 검증합니다.
 	/// </summary>
 	/// <param name="proto">검증할 프로토콜 버퍼</param>
@@ -130,56 +209,6 @@ public static class BlockedInteger
 		}
 
 		return errors.Count == 0;
-	}
-
-	/// <summary>
-	/// 지정된 인덱스 범위의 값들만 디코딩합니다.
-	/// </summary>
-	/// <param name="proto">디코딩할 프로토콜 버퍼</param>
-	/// <param name="startIndex">시작 인덱스 (포함)</param>
-	/// <param name="endIndex">종료 인덱스 (제외)</param>
-	/// <param name="integers">디코딩된 값 목록</param>
-	/// <remarks>
-	/// startIndex must be less than or equal to endIndex; ArgumentException is thrown otherwise.
-	/// Out-of-bounds indices are automatically clamped to valid range.
-	/// Trusted input only. External proto Count range is not validated.
-	/// </remarks>
-	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
-	/// <exception cref="ArgumentException">startIndex &gt; endIndex인 경우</exception>
-	public static void DecodeRange(PbBlockedInteger proto,
-		Int32 startIndex, Int32 endIndex, out IReadOnlyList<Int64> integers)
-	{
-		ArgumentNullException.ThrowIfNull(proto);
-		if (startIndex > endIndex)
-			throw new ArgumentException(
-				$"startIndex ({startIndex}) must be <= endIndex ({endIndex})", nameof(startIndex));
-
-		List<Int64> result = [];
-		Int32 currentIndex = 0;
-
-		foreach (PbBlock block in proto.Blocks)
-		{
-			Int32 blockValueCount = Decoders.GetBlockValueCount(block);
-			Int32 blockEndIndex = currentIndex + blockValueCount;
-
-			// 블록이 요청 범위와 겹치는지 확인
-			if (blockEndIndex > startIndex && currentIndex < endIndex)
-			{
-				// 블록 내에서 필요한 부분의 시작/종료 오프셋
-				Int32 blockStartOffset = Math.Max(0, startIndex - currentIndex);
-				Int32 blockEndOffset = Math.Min(blockValueCount, endIndex - currentIndex);
-
-				Decoders.DecodeBlockRange(block, blockStartOffset, blockEndOffset, result);
-			}
-
-			currentIndex = blockEndIndex;
-
-			// 이미 필요한 범위를 모두 디코딩했으면 종료
-			if (currentIndex >= endIndex)
-				break;
-		}
-
-		integers = result;
 	}
 
 	/// <summary>
@@ -356,42 +385,42 @@ public static class BlockedInteger
 			}
 		}
 
-		public static void DecodeBlockRange(PbBlock block,
+		public static void DecodeBlockPage(PbBlock block,
 			Int32 startOffset, Int32 endOffset, List<Int64> output)
 		{
 			switch (block.BlockOneofCase)
 			{
 				case PbBlock.BlockOneofOneofCase.Constant:
-					DecodeConstantRange(block.Constant, startOffset, endOffset, output);
+					DecodeConstantPage(block.Constant, startOffset, endOffset, output);
 					break;
 
 				case PbBlock.BlockOneofOneofCase.Arithmetic:
-					DecodeArithmeticRange(block.Arithmetic, startOffset, endOffset, output);
+					DecodeArithmeticPage(block.Arithmetic, startOffset, endOffset, output);
 					break;
 
 				case PbBlock.BlockOneofOneofCase.AscendingBitmap:
-					DecodeAscendingBitmapRange(block.AscendingBitmap, startOffset, endOffset, output);
+					DecodeAscendingBitmapPage(block.AscendingBitmap, startOffset, endOffset, output);
 					break;
 
 				case PbBlock.BlockOneofOneofCase.Ascending:
-					DecodeAscendingRange(block.Ascending, startOffset, endOffset, output);
+					DecodeAscendingPage(block.Ascending, startOffset, endOffset, output);
 					break;
 
 				case PbBlock.BlockOneofOneofCase.DescendingBitmap:
-					DecodeDescendingBitmapRange(block.DescendingBitmap, startOffset, endOffset, output);
+					DecodeDescendingBitmapPage(block.DescendingBitmap, startOffset, endOffset, output);
 					break;
 
 				case PbBlock.BlockOneofOneofCase.Descending:
-					DecodeDescendingRange(block.Descending, startOffset, endOffset, output);
+					DecodeDescendingPage(block.Descending, startOffset, endOffset, output);
 					break;
 
 				case PbBlock.BlockOneofOneofCase.Delta:
-					DecodeDeltaRange(block.Delta, startOffset, endOffset, output);
+					DecodeDeltaPage(block.Delta, startOffset, endOffset, output);
 					break;
 			}
 		}
 
-		private static void DecodeConstantRange(PbConstantBlock block,
+		private static void DecodeConstantPage(PbConstantBlock block,
 			Int32 startOffset, Int32 endOffset, List<Int64> output)
 		{
 			for (Int32 i = startOffset; i < endOffset; ++i)
@@ -400,7 +429,7 @@ public static class BlockedInteger
 			}
 		}
 
-		private static void DecodeArithmeticRange(PbArithmeticBlock block,
+		private static void DecodeArithmeticPage(PbArithmeticBlock block,
 			Int32 startOffset, Int32 endOffset, List<Int64> output)
 		{
 			Int64 current = unchecked(block.First + (Int64)startOffset * block.Step);
@@ -411,7 +440,7 @@ public static class BlockedInteger
 			}
 		}
 
-		private static void DecodeAscendingBitmapRange(PbAscendingBitmapBlock block,
+		private static void DecodeAscendingBitmapPage(PbAscendingBitmapBlock block,
 			Int32 startOffset, Int32 endOffset, List<Int64> output)
 		{
 			Int64 first = block.First;
@@ -446,7 +475,7 @@ public static class BlockedInteger
 			}
 		}
 
-		private static void DecodeAscendingRange(PbAscendingBlock block,
+		private static void DecodeAscendingPage(PbAscendingBlock block,
 			Int32 startOffset, Int32 endOffset, List<Int64> output)
 		{
 			if (startOffset == 0)
@@ -465,7 +494,7 @@ public static class BlockedInteger
 			}
 		}
 
-		private static void DecodeDescendingBitmapRange(PbDescendingBitmapBlock block,
+		private static void DecodeDescendingBitmapPage(PbDescendingBitmapBlock block,
 			Int32 startOffset, Int32 endOffset, List<Int64> output)
 		{
 			Int64 first = block.First;
@@ -500,7 +529,7 @@ public static class BlockedInteger
 			}
 		}
 
-		private static void DecodeDescendingRange(PbDescendingBlock block,
+		private static void DecodeDescendingPage(PbDescendingBlock block,
 			Int32 startOffset, Int32 endOffset, List<Int64> output)
 		{
 			if (startOffset == 0)
@@ -519,7 +548,7 @@ public static class BlockedInteger
 			}
 		}
 
-		private static void DecodeDeltaRange(PbDeltaBlock block,
+		private static void DecodeDeltaPage(PbDeltaBlock block,
 			Int32 startOffset, Int32 endOffset, List<Int64> output)
 		{
 			for (Int32 i = startOffset; i < endOffset && i < block.Deltas.Count; ++i)
