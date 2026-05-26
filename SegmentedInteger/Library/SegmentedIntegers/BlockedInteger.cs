@@ -70,6 +70,27 @@ public static class BlockedInteger
 	}
 
 	/// <summary>
+	/// 블록 구조의 무결성을 검증합니다.
+	/// </summary>
+	/// <param name="proto">검증할 프로토콜 버퍼</param>
+	/// <param name="errors">발견된 에러 메시지 목록 (null인 경우 에러 메시지 생성 안 함)</param>
+	/// <returns>유효하면 true, 그렇지 않으면 false</returns>
+	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
+	public static bool TryValidate(PbBlockedInteger proto, out List<string> errors)
+	{
+		ArgumentNullException.ThrowIfNull(proto);
+		errors = [];
+
+		for (Int32 blockIndex = 0; blockIndex < proto.Blocks.Count; ++blockIndex)
+		{
+			PbBlock block = proto.Blocks[blockIndex];
+			ValidateBlock(block, blockIndex, errors);
+		}
+
+		return errors.Count == 0;
+	}
+
+	/// <summary>
 	/// 블록 구조를 Int64 시퀀스로 디코딩합니다. 순서와 중복을 보존합니다.
 	/// </summary>
 	/// <remarks>신뢰된 입력 전용. 외부 proto는 Count 범위 등을 검증하지 않습니다.</remarks>
@@ -273,6 +294,211 @@ public static class BlockedInteger
 		{
 			current = unchecked(current - (Int64)diff);
 			output.Add(current);
+		}
+	}
+
+	private static void ValidateBlock(PbBlock block, Int32 blockIndex, List<string> errors)
+	{
+		switch (block.BlockOneofCase)
+		{
+			case PbBlock.BlockOneofOneofCase.Constant:
+				ValidateConstantBlock(block.Constant, blockIndex, errors);
+				break;
+			case PbBlock.BlockOneofOneofCase.Arithmetic:
+				ValidateArithmeticBlock(block.Arithmetic, blockIndex, errors);
+				break;
+			case PbBlock.BlockOneofOneofCase.AscendingBitmap:
+				ValidateAscendingBitmapBlock(block.AscendingBitmap, blockIndex, errors);
+				break;
+			case PbBlock.BlockOneofOneofCase.Ascending:
+				ValidateAscendingBlock(block.Ascending, blockIndex, errors);
+				break;
+			case PbBlock.BlockOneofOneofCase.DescendingBitmap:
+				ValidateDescendingBitmapBlock(block.DescendingBitmap, blockIndex, errors);
+				break;
+			case PbBlock.BlockOneofOneofCase.Descending:
+				ValidateDescendingBlock(block.Descending, blockIndex, errors);
+				break;
+			case PbBlock.BlockOneofOneofCase.Delta:
+				ValidateDeltaBlock(block.Delta, blockIndex, errors);
+				break;
+			case PbBlock.BlockOneofOneofCase.None:
+				errors.Add($"Block[{blockIndex}]: 블록 타입이 설정되지 않음");
+				break;
+			default:
+				errors.Add($"Block[{blockIndex}]: 알 수 없는 블록 타입 {block.BlockOneofCase}");
+				break;
+		}
+	}
+
+	private static void ValidateConstantBlock(PbConstantBlock block, Int32 blockIndex, List<string> errors)
+	{
+		if (block is null)
+		{
+			errors.Add($"Block[{blockIndex}] (Constant): null");
+			return;
+		}
+
+		if (block.Count < 1)
+		{
+			errors.Add($"Block[{blockIndex}] (Constant): Count는 1 이상이어야 함 (현재: {block.Count})");
+		}
+
+		if (block.Count > MaxBlockValues)
+		{
+			errors.Add($"Block[{blockIndex}] (Constant): Count는 {MaxBlockValues} 이하여야 함 (현재: {block.Count})");
+		}
+	}
+
+	private static void ValidateArithmeticBlock(PbArithmeticBlock block, Int32 blockIndex, List<string> errors)
+	{
+		if (block is null)
+		{
+			errors.Add($"Block[{blockIndex}] (Arithmetic): null");
+			return;
+		}
+
+		if (block.Count < 1)
+		{
+			errors.Add($"Block[{blockIndex}] (Arithmetic): Count는 1 이상이어야 함 (현재: {block.Count})");
+		}
+
+		if (block.Count > MaxBlockValues)
+		{
+			errors.Add($"Block[{blockIndex}] (Arithmetic): Count는 {MaxBlockValues} 이하여야 함 (현재: {block.Count})");
+		}
+	}
+
+	private static void ValidateAscendingBitmapBlock(PbAscendingBitmapBlock block, Int32 blockIndex, List<string> errors)
+	{
+		if (block is null)
+		{
+			errors.Add($"Block[{blockIndex}] (AscendingBitmap): null");
+			return;
+		}
+
+		Int32 setBitCount = BitOperations.PopCount(block.Bits) + 1;
+		if (setBitCount < BitmapBlockMinCount)
+		{
+			errors.Add($"Block[{blockIndex}] (AscendingBitmap): 최소 {BitmapBlockMinCount}개 값 필요 (현재: {setBitCount})");
+		}
+
+		if (block.Bits > 0)
+		{
+			Int32 highestBit = 63 - BitOperations.LeadingZeroCount(block.Bits);
+			if (highestBit >= BitmapBlockRange)
+			{
+				errors.Add($"Block[{blockIndex}] (AscendingBitmap): 범위는 {BitmapBlockRange} 이하여야 함 (현재 최대: {highestBit + 1})");
+			}
+		}
+	}
+
+	private static void ValidateAscendingBlock(PbAscendingBlock block, Int32 blockIndex, List<string> errors)
+	{
+		if (block is null)
+		{
+			errors.Add($"Block[{blockIndex}] (Ascending): null");
+			return;
+		}
+
+		Int32 totalCount = block.Diffs.Count + 1;
+		if (totalCount < 1)
+		{
+			errors.Add($"Block[{blockIndex}] (Ascending): 최소 1개 값 필요 (현재: {totalCount})");
+		}
+
+		if (totalCount > MaxBlockValues)
+		{
+			errors.Add($"Block[{blockIndex}] (Ascending): 최대 {MaxBlockValues}개 값 허용 (현재: {totalCount})");
+		}
+
+		if (block.Diffs.Count > MaxBlockValues)
+		{
+			errors.Add($"Block[{blockIndex}] (Ascending): Diffs는 {MaxBlockValues}개 이하여야 함 (현재: {block.Diffs.Count})");
+		}
+	}
+
+	private static void ValidateDescendingBitmapBlock(PbDescendingBitmapBlock block, Int32 blockIndex, List<string> errors)
+	{
+		if (block is null)
+		{
+			errors.Add($"Block[{blockIndex}] (DescendingBitmap): null");
+			return;
+		}
+
+		Int32 setBitCount = BitOperations.PopCount(block.Bits) + 1;
+		if (setBitCount < BitmapBlockMinCount)
+		{
+			errors.Add($"Block[{blockIndex}] (DescendingBitmap): 최소 {BitmapBlockMinCount}개 값 필요 (현재: {setBitCount})");
+		}
+
+		if (block.Bits > 0)
+		{
+			Int32 highestBit = 63 - BitOperations.LeadingZeroCount(block.Bits);
+			if (highestBit >= BitmapBlockRange)
+			{
+				errors.Add($"Block[{blockIndex}] (DescendingBitmap): 범위는 {BitmapBlockRange} 이하여야 함 (현재 최대: {highestBit + 1})");
+			}
+		}
+	}
+
+	private static void ValidateDescendingBlock(PbDescendingBlock block, Int32 blockIndex, List<string> errors)
+	{
+		if (block is null)
+		{
+			errors.Add($"Block[{blockIndex}] (Descending): null");
+			return;
+		}
+
+		Int32 totalCount = block.Diffs.Count + 1;
+		if (totalCount < 1)
+		{
+			errors.Add($"Block[{blockIndex}] (Descending): 최소 1개 값 필요 (현재: {totalCount})");
+		}
+
+		if (totalCount > MaxBlockValues)
+		{
+			errors.Add($"Block[{blockIndex}] (Descending): 최대 {MaxBlockValues}개 값 허용 (현재: {totalCount})");
+		}
+
+		if (block.Diffs.Count > MaxBlockValues)
+		{
+			errors.Add($"Block[{blockIndex}] (Descending): Diffs는 {MaxBlockValues}개 이하여야 함 (현재: {block.Diffs.Count})");
+		}
+	}
+
+	private static void ValidateDeltaBlock(PbDeltaBlock block, Int32 blockIndex, List<string> errors)
+	{
+		if (block is null)
+		{
+			errors.Add($"Block[{blockIndex}] (Delta): null");
+			return;
+		}
+
+		if (block.Deltas.Count < 1)
+		{
+			errors.Add($"Block[{blockIndex}] (Delta): Deltas는 1개 이상이어야 함 (현재: {block.Deltas.Count})");
+			return;
+		}
+
+		if (block.Deltas.Count > MaxBlockValues)
+		{
+			errors.Add($"Block[{blockIndex}] (Delta): Deltas는 {MaxBlockValues}개 이하여야 함 (현재: {block.Deltas.Count})");
+		}
+
+		Int64 min = Int64.MaxValue;
+		Int64 max = Int64.MinValue;
+
+		foreach (Int64 delta in block.Deltas)
+		{
+			Int64 value = unchecked(block.Reference + delta);
+			if (value < min) min = value;
+			if (value > max) max = value;
+		}
+
+		if (unchecked((UInt64)(max - min)) > (UInt64)DeltaBlockMax)
+		{
+			errors.Add($"Block[{blockIndex}] (Delta): 범위는 {DeltaBlockMax} 이하여야 함 (현재: {max - min})");
 		}
 	}
 

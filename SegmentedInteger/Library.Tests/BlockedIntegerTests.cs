@@ -808,4 +808,265 @@ public class BlockedIntegerTests
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
 		await AssertRoundTrip([42L]);
 	}
+
+	// ─── ValidateIntegrity ───
+
+	[Test]
+	public async Task ValidateIntegrity_ValidProto_ReturnsTrue()
+	{
+		// 유효한 프로토 → validation 성공
+		BlockedInteger.Encode([1, 2, 3, 4, 5], out var proto);
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+		await Assert.That(isValid).IsTrue();
+		await Assert.That(errors).IsEmpty();
+	}
+
+	[Test]
+	public async Task ValidateIntegrity_EmptyProto_ReturnsTrue()
+	{
+		// 빈 프로토 → 유효
+		Pb.BlockedInteger proto = new();
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+		await Assert.That(isValid).IsTrue();
+		await Assert.That(errors).IsEmpty();
+	}
+
+	[Test]
+	public async Task ValidateIntegrity_NullProto_ThrowsArgumentNullException()
+	{
+		// null proto → ArgumentNullException 발생
+		await Assert.That(() =>
+		{
+			BlockedInteger.TryValidate(null!, out _);
+		}).Throws<ArgumentNullException>();
+	}
+
+	[Test]
+	public async Task ValidateIntegrity_InvalidConstantBlock_Count0()
+	{
+		// ConstantBlock with Count=0 (invalid)
+		Pb.BlockedInteger proto = new()
+		{
+			Blocks =
+			{
+				new Pb.BlockedInteger.Types.Block
+				{
+					Constant = new Pb.BlockedInteger.Types.Block.Types.ConstantBlock
+					{
+						Value = 42,
+						Count = 0
+					}
+				}
+			}
+		};
+
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+		await Assert.That(isValid).IsFalse();
+		await Assert.That(errors.Count).IsGreaterThan(0);
+		await Assert.That(errors[0]).Contains("Count는 1 이상");
+	}
+
+	[Test]
+	public async Task ValidateIntegrity_InvalidConstantBlock_CountTooLarge()
+	{
+		// ConstantBlock with Count > MaxBlockValues
+		Pb.BlockedInteger proto = new()
+		{
+			Blocks =
+			{
+				new Pb.BlockedInteger.Types.Block
+				{
+					Constant = new Pb.BlockedInteger.Types.Block.Types.ConstantBlock
+					{
+						Value = 42,
+						Count = 10000
+					}
+				}
+			}
+		};
+
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+		await Assert.That(isValid).IsFalse();
+		await Assert.That(errors.Count).IsGreaterThan(0);
+		await Assert.That(errors[0]).Contains("MaxBlockValues");
+	}
+
+	[Test]
+	public async Task ValidateIntegrity_InvalidAscendingBitmapBlock_BelowMinCount()
+	{
+		// AscendingBitmapBlock with count < 10
+		Pb.BlockedInteger proto = new()
+		{
+			Blocks =
+			{
+				new Pb.BlockedInteger.Types.Block
+				{
+					AscendingBitmap = new Pb.BlockedInteger.Types.Block.Types.AscendingBitmapBlock
+					{
+						First = 0,
+						Bits = 0b111  // 3 set bits + 1 (first) = 4 values total < 10
+					}
+				}
+			}
+		};
+
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+		await Assert.That(isValid).IsFalse();
+		await Assert.That(errors.Count).IsGreaterThan(0);
+		await Assert.That(errors[0]).Contains("최소");
+	}
+
+	[Test]
+	public async Task ValidateIntegrity_InvalidAscendingBitmapBlock_RangeTooLarge()
+	{
+		// AscendingBitmapBlock with range > 63
+		Pb.BlockedInteger proto = new()
+		{
+			Blocks =
+			{
+				new Pb.BlockedInteger.Types.Block
+				{
+					AscendingBitmap = new Pb.BlockedInteger.Types.Block.Types.AscendingBitmapBlock
+					{
+						First = 0,
+						Bits = 1UL << 63  // bit 63 set → range=64 > 63
+					}
+				}
+			}
+		};
+
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+		await Assert.That(isValid).IsFalse();
+		await Assert.That(errors.Count).IsGreaterThan(0);
+		await Assert.That(errors[0]).Contains("범위");
+	}
+
+	[Test]
+	public async Task ValidateIntegrity_InvalidAscendingBlock_DiffsTooMany()
+	{
+		// AscendingBlock with too many diffs
+		Pb.BlockedInteger proto = new()
+		{
+			Blocks =
+			{
+				new Pb.BlockedInteger.Types.Block
+				{
+					Ascending = new Pb.BlockedInteger.Types.Block.Types.AscendingBlock
+					{
+						First = 0
+					}
+				}
+			}
+		};
+
+		// Add 10000 diffs (exceeds MaxBlockValues)
+		for (int i = 0; i < 10000; i++)
+			proto.Blocks[0].Ascending.Diffs.Add(1);
+
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+		await Assert.That(isValid).IsFalse();
+		await Assert.That(errors.Count).IsGreaterThan(0);
+	}
+
+	[Test]
+	public async Task ValidateIntegrity_InvalidDeltaBlock_EmptyDeltas()
+	{
+		// DeltaBlock with no deltas
+		Pb.BlockedInteger proto = new()
+		{
+			Blocks =
+			{
+				new Pb.BlockedInteger.Types.Block
+				{
+					Delta = new Pb.BlockedInteger.Types.Block.Types.DeltaBlock
+					{
+						Reference = 0
+					}
+				}
+			}
+		};
+
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+		await Assert.That(isValid).IsFalse();
+		await Assert.That(errors.Count).IsGreaterThan(0);
+		await Assert.That(errors[0]).Contains("Deltas는 1개 이상");
+	}
+
+	[Test]
+	public async Task ValidateIntegrity_InvalidDeltaBlock_RangeTooLarge()
+	{
+		// DeltaBlock with range > 16382
+		Pb.BlockedInteger proto = new()
+		{
+			Blocks =
+			{
+				new Pb.BlockedInteger.Types.Block
+				{
+					Delta = new Pb.BlockedInteger.Types.Block.Types.DeltaBlock
+					{
+						Reference = 0,
+						Deltas = { 0, 20000 }  // range = 20000 > 16382
+					}
+				}
+			}
+		};
+
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+		await Assert.That(isValid).IsFalse();
+		await Assert.That(errors.Count).IsGreaterThan(0);
+		await Assert.That(errors[0]).Contains("범위");
+	}
+
+	[Test]
+	public async Task ValidateIntegrity_MultipleErrors()
+	{
+		// Multiple invalid blocks
+		Pb.BlockedInteger proto = new()
+		{
+			Blocks =
+			{
+				new Pb.BlockedInteger.Types.Block
+				{
+					Constant = new Pb.BlockedInteger.Types.Block.Types.ConstantBlock
+					{
+						Value = 42,
+						Count = 0  // invalid
+					}
+				},
+				new Pb.BlockedInteger.Types.Block
+				{
+					Delta = new Pb.BlockedInteger.Types.Block.Types.DeltaBlock
+					{
+						Reference = 0
+						// empty deltas - invalid
+					}
+				}
+			}
+		};
+
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+		await Assert.That(isValid).IsFalse();
+		await Assert.That(errors.Count).IsGreaterThanOrEqualTo(2);
+	}
+
+	[Test]
+	public async Task ValidateIntegrity_NullBlockContent()
+	{
+		// Null block content
+		Pb.BlockedInteger proto = new()
+		{
+			Blocks =
+			{
+				new Pb.BlockedInteger.Types.Block
+				{
+					Constant = null
+				}
+			}
+		};
+
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+		await Assert.That(isValid).IsFalse();
+		await Assert.That(errors.Count).IsGreaterThan(0);
+		await Assert.That(errors[0]).Contains("null");
+	}
 }
