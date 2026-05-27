@@ -1,6 +1,8 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Library.SegmentedIntegers;
 
@@ -88,7 +90,10 @@ public static class BlockedInteger
 		ArgumentNullException.ThrowIfNull(proto);
 		Int32 totalCount = 0;
 		foreach (PbBlock block in proto.Blocks)
+		{
 			totalCount += Decoders.GetBlockValueCount(block);
+		}
+
 		List<Int64> result = new(totalCount);
 
 		foreach (PbBlock block in proto.Blocks)
@@ -180,8 +185,15 @@ public static class BlockedInteger
 			throw new ArgumentException(
 				$"pageSize ({pageSize}) must be > 0", nameof(pageSize));
 
-		Int32 startIndex = pageIndex * pageSize;
-		Int32 endIndex = startIndex + pageSize;
+		Int64 startLong = checked((Int64)pageIndex * pageSize);
+		Int64 endLong = startLong + pageSize;
+		if (startLong > Int32.MaxValue)
+		{
+			integers = [];
+			return;
+		}
+		Int32 startIndex = checked((Int32)startLong);
+		Int32 endIndex = endLong > Int32.MaxValue ? Int32.MaxValue : checked((Int32)endLong);
 
 		List<Int64> result = new(pageSize);
 		Int32 currentIndex = 0;
@@ -258,28 +270,28 @@ public static class BlockedInteger
 
 	private static class Encoders
 	{
-		public static PbBlock EncodeConstant(List<Int64> buffer) =>
+		public static PbBlock EncodeConstant(ReadOnlySpan<Int64> buffer) =>
 			new()
 			{
 				Constant = new PbConstantBlock
 				{
 					Value = buffer[0],
-					Count = buffer.Count
+					Count = buffer.Length
 				}
 			};
 
-		public static PbBlock EncodeArithmetic(List<Int64> buffer) =>
+		public static PbBlock EncodeArithmetic(ReadOnlySpan<Int64> buffer) =>
 			new()
 			{
 				Arithmetic = new PbArithmeticBlock
 				{
 					First = buffer[0],
 					Step = unchecked(buffer[1] - buffer[0]),
-					Count = buffer.Count
+					Count = buffer.Length
 				}
 			};
 
-		public static PbBlock EncodeAscendingBitmap(List<Int64> buffer)
+		public static PbBlock EncodeAscendingBitmap(ReadOnlySpan<Int64> buffer)
 		{
 			Int64 first = buffer[0];
 			return new()
@@ -292,17 +304,17 @@ public static class BlockedInteger
 			};
 		}
 
-		public static PbBlock EncodeAscending(List<Int64> buffer)
+		public static PbBlock EncodeAscending(ReadOnlySpan<Int64> buffer)
 		{
 			PbAscendingBlock block = new() { First = buffer[0] };
-			for (Int32 i = 1; i < buffer.Count; ++i)
+			for (Int32 i = 1; i < buffer.Length; ++i)
 			{
 				block.Diffs.Add(unchecked((UInt64)(buffer[i] - buffer[i - 1])));
 			}
 			return new() { Ascending = block };
 		}
 
-		public static PbBlock EncodeDescendingBitmap(List<Int64> buffer)
+		public static PbBlock EncodeDescendingBitmap(ReadOnlySpan<Int64> buffer)
 		{
 			Int64 first = buffer[0];
 			return new()
@@ -315,24 +327,24 @@ public static class BlockedInteger
 			};
 		}
 
-		public static PbBlock EncodeDescending(List<Int64> buffer)
+		public static PbBlock EncodeDescending(ReadOnlySpan<Int64> buffer)
 		{
 			PbDescendingBlock block = new() { First = buffer[0] };
-			for (Int32 i = 1; i < buffer.Count; ++i)
+			for (Int32 i = 1; i < buffer.Length; ++i)
 			{
 				block.Diffs.Add(unchecked((UInt64)(buffer[i - 1] - buffer[i])));
 			}
 			return new() { Descending = block };
 		}
 
-		public static PbBlock EncodeDeltaOfDelta(List<Int64> buffer)
+		public static PbBlock EncodeDeltaOfDelta(ReadOnlySpan<Int64> buffer)
 		{
 			PbDeltaOfDeltaBlock block = new() { First = buffer[0] };
-			if (buffer.Count >= 2)
+			if (buffer.Length >= 2)
 			{
 				block.FirstDelta = unchecked(buffer[1] - buffer[0]);
 				Int64 prevDelta = block.FirstDelta;
-				for (Int32 i = 2; i < buffer.Count; i++)
+				for (Int32 i = 2; i < buffer.Length; i++)
 				{
 					Int64 delta = unchecked(buffer[i] - buffer[i - 1]);
 					block.DeltaOfDeltas.Add(unchecked(delta - prevDelta));
@@ -342,7 +354,7 @@ public static class BlockedInteger
 			return new() { DeltaOfDelta = block };
 		}
 
-		public static PbBlock EncodeDelta(List<Int64> buffer, Int64 min, Int64 max)
+		public static PbBlock EncodeDelta(ReadOnlySpan<Int64> buffer, Int64 min, Int64 max)
 		{
 			Int64 reference = min + (max - min) / 2;
 			PbDeltaBlock block = new() { Reference = reference };
@@ -353,7 +365,7 @@ public static class BlockedInteger
 			return new() { Delta = block };
 		}
 
-		public static PbBlock EncodeBitPacked(List<Int64> buffer, Int64 min, Int64 max)
+		public static PbBlock EncodeBitPacked(ReadOnlySpan<Int64> buffer, Int64 min, Int64 max)
 		{
 			UInt64 range = unchecked((UInt64)(max - min));
 			Int32 bitWidth = range == 0 ? 1 : (BitOperations.Log2(range) + 1);
@@ -362,14 +374,14 @@ public static class BlockedInteger
 			{
 				MinValue = min,
 				BitWidth = (UInt32)bitWidth,
-				Count = (UInt32)buffer.Count,
+				Count = (UInt32)buffer.Length,
 				PackedData = Google.Protobuf.UnsafeByteOperations.UnsafeWrap(packed)
 			}};
 		}
 
-		private static byte[] PackBits(List<Int64> buffer, Int64 min, Int32 bitWidth)
+		private static byte[] PackBits(ReadOnlySpan<Int64> buffer, Int64 min, Int32 bitWidth)
 		{
-			Int32 totalBytes = (buffer.Count * bitWidth + 7) / 8;
+			Int32 totalBytes = (buffer.Length * bitWidth + 7) / 8;
 			byte[] result = new byte[totalBytes];
 			Int32 bitIndex = 0;
 
@@ -389,13 +401,13 @@ public static class BlockedInteger
 		}
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public static UInt64 BuildAscendingBitmapBits(List<Int64> buffer, Int64 first)
+		public static UInt64 BuildAscendingBitmapBits(ReadOnlySpan<Int64> buffer, Int64 first)
 		{
 			// buffer[1..n]의 각 값에 대해, (value - first - 1) 위치의 비트 설정
 			// 예: buffer = [0, 5, 10], first = 0
 			//     → bits |= 1 << 4, 1 << 9  (positions 4, 9)
 			UInt64 bits = 0UL;
-			for (Int32 i = 1; i < buffer.Count; ++i)
+			for (Int32 i = 1; i < buffer.Length; ++i)
 			{
 				Int32 bitPos = (Int32)(buffer[i] - first - 1);
 				bits |= 1UL << bitPos;
@@ -404,13 +416,13 @@ public static class BlockedInteger
 		}
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public static UInt64 BuildDescendingBitmapBits(List<Int64> buffer, Int64 first)
+		public static UInt64 BuildDescendingBitmapBits(ReadOnlySpan<Int64> buffer, Int64 first)
 		{
 			// buffer[1..n]의 각 값에 대해, (first - value - 1) 위치의 비트 설정
 			// 예: buffer = [12, 10, 8], first = 12
 			//     → bits |= 1 << 1, 1 << 3  (positions 1, 3)
 			UInt64 bits = 0UL;
-			for (Int32 i = 1; i < buffer.Count; ++i)
+			for (Int32 i = 1; i < buffer.Length; ++i)
 			{
 				Int32 bitPos = (Int32)(first - buffer[i] - 1);
 				bits |= 1UL << bitPos;
@@ -419,7 +431,7 @@ public static class BlockedInteger
 		}
 	}
 
-	private static class Decoders
+	internal static class Decoders
 	{
 		public static Int32 GetBlockValueCount(PbBlock block)
 		{
@@ -502,32 +514,44 @@ public static class BlockedInteger
 				case PbBlock.BlockOneofOneofCase.BitPacked:
 					DecodeBitPackedPage(block.BitPacked, startOffset, endOffset, output);
 					break;
+
+				default:
+					throw new InvalidOperationException($"Unknown block type: {block.BlockOneofCase}");
 			}
 		}
 
 		private static void DecodeConstantPage(PbConstantBlock block,
 			Int32 startOffset, Int32 endOffset, List<Int64> output)
 		{
-			for (Int32 i = startOffset; i < endOffset; ++i)
-			{
-				output.Add(block.Value);
-			}
+			Int32 actualEnd = Math.Min(endOffset, block.Count);
+			Int32 written = actualEnd - startOffset;
+			if (written <= 0) return;
+			Int32 start = output.Count;
+			CollectionsMarshal.SetCount(output, start + written);
+			CollectionsMarshal.AsSpan(output).Slice(start, written).Fill(block.Value);
 		}
 
 		private static void DecodeArithmeticPage(PbArithmeticBlock block,
 			Int32 startOffset, Int32 endOffset, List<Int64> output)
 		{
-			Int64 current = unchecked(block.First + (Int64)startOffset * block.Step);
-			for (Int32 i = startOffset; i < endOffset; ++i)
-			{
-				output.Add(current);
-				current = unchecked(current + block.Step);
-			}
+			Int32 actualEnd = Math.Min(endOffset, block.Count);
+			Int32 written = actualEnd - startOffset;
+			if (written <= 0) return;
+
+			Int64 firstInPage = unchecked(block.First + (Int64)startOffset * block.Step);
+			Int32 start = output.Count;
+			CollectionsMarshal.SetCount(output, start + written);
+			Span<Int64> dest = CollectionsMarshal.AsSpan(output).Slice(start, written);
+
+			FillArithmetic(dest, firstInPage, block.Step);
 		}
 
 		private static void DecodeAscendingBitmapPage(PbAscendingBitmapBlock block,
 			Int32 startOffset, Int32 endOffset, List<Int64> output)
 		{
+			Int32 totalCount = BitOperations.PopCount(block.Bits) + 1;
+			if (startOffset >= totalCount) return;
+
 			Int64 first = block.First;
 			Int32 currentPos = 0;
 
@@ -585,6 +609,9 @@ public static class BlockedInteger
 		private static void DecodeDescendingBitmapPage(PbDescendingBitmapBlock block,
 			Int32 startOffset, Int32 endOffset, List<Int64> output)
 		{
+			Int32 totalCount = BitOperations.PopCount(block.Bits) + 1;
+			if (startOffset >= totalCount) return;
+
 			Int64 first = block.First;
 			Int32 currentPos = 0;
 
@@ -692,34 +719,75 @@ public static class BlockedInteger
 			Int32 count = (Int32)block.Count;
 			Int64 min = block.MinValue;
 
-			Int32 byteIndex = startOffset * bitWidth >> 3;
-			Int32 bitInByte = (startOffset * bitWidth) & 7;
-			byte currentByte = data[byteIndex];
+			Int32 actualEnd = Math.Min(endOffset, count);
+			if (startOffset >= actualEnd) return;
 
-			for (Int32 i = startOffset; i < endOffset && i < count; i++)
+			Int32 written = actualEnd - startOffset;
+
+			if (written == 0 || bitWidth > 57)
+			{
+				Int32 byteIndex = startOffset * bitWidth >> 3;
+				Int32 bitInByte = (startOffset * bitWidth) & 7;
+				byte currentByte = data[byteIndex];
+
+				for (Int32 i = startOffset; i < actualEnd; i++)
+				{
+					UInt64 value = 0;
+					for (Int32 b = 0; b < bitWidth; b++)
+					{
+						if ((currentByte & (1 << bitInByte)) != 0)
+						{
+							value |= 1UL << b;
+						}
+						bitInByte++;
+						if (bitInByte == 8)
+						{
+							bitInByte = 0;
+							byteIndex++;
+							if (byteIndex < data.Length)
+								currentByte = data[byteIndex];
+						}
+					}
+
+					output.Add(unchecked(min + (Int64)value));
+				}
+				return;
+			}
+
+			UInt64 mask = (1UL << bitWidth) - 1;
+			Int32 outputStart = output.Count;
+			CollectionsMarshal.SetCount(output, outputStart + written);
+			Span<Int64> dest = CollectionsMarshal.AsSpan(output).Slice(outputStart, written);
+
+			Int32 startBitOffset = startOffset * bitWidth;
+			Int32 safeEnd =
+				startOffset + ComputeSafeCount(data.Length - (startBitOffset >> 3), written, bitWidth);
+
+			// 빠른 경로: 64비트 슬라이딩 윈도우
+			for (Int32 i = startOffset; i < safeEnd; ++i)
+			{
+				Int32 bitOffset = i * bitWidth;
+				UInt64 raw =
+					System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(data.Slice(bitOffset >> 3));
+				dest[i - startOffset] = unchecked(min + (Int64)((raw >> (bitOffset & 7)) & mask));
+			}
+
+			// tail: 기존 스칼라
+			Int32 bitIdx = safeEnd * bitWidth;
+			for (Int32 i = safeEnd; i < actualEnd; i++)
 			{
 				UInt64 value = 0;
 				for (Int32 b = 0; b < bitWidth; b++)
 				{
-					if ((currentByte & (1 << bitInByte)) != 0)
-					{
+					if ((data[bitIdx >> 3] & (1 << (bitIdx & 7))) != 0)
 						value |= 1UL << b;
-					}
-					bitInByte++;
-					if (bitInByte == 8)
-					{
-						bitInByte = 0;
-						byteIndex++;
-						if (byteIndex < data.Length)
-							currentByte = data[byteIndex];
-					}
+					bitIdx++;
 				}
-
-				output.Add(unchecked(min + (Int64)value));
+				dest[i - startOffset] = unchecked(min + (Int64)value);
 			}
 		}
 
-		public static void DecodeConstant(PbConstantBlock block, List<Int64> output)
+		internal static void DecodeConstantBaseline(PbConstantBlock block, List<Int64> output)
 		{
 			for (Int32 i = 0; i < block.Count; ++i)
 			{
@@ -727,13 +795,69 @@ public static class BlockedInteger
 			}
 		}
 
-		public static void DecodeArithmetic(PbArithmeticBlock block, List<Int64> output)
+		public static void DecodeConstant(PbConstantBlock block, List<Int64> output)
+		{
+			Int32 count = block.Count;
+			if (count <= 0) return;
+			Int32 start = output.Count;
+			CollectionsMarshal.SetCount(output, start + count);
+			CollectionsMarshal.AsSpan(output).Slice(start, count).Fill(block.Value);
+		}
+
+		internal static void DecodeArithmeticBaseline(PbArithmeticBlock block, List<Int64> output)
 		{
 			Int64 current = block.First;
 			for (Int32 i = 0; i < block.Count; ++i)
 			{
 				output.Add(current);
 				current = unchecked(current + block.Step);
+			}
+		}
+
+		public static void DecodeArithmetic(PbArithmeticBlock block, List<Int64> output)
+		{
+			Int64 first = block.First;
+			Int64 step = block.Step;
+			Int32 count = block.Count;
+			if (count <= 0) return;
+
+			Int32 start = output.Count;
+			CollectionsMarshal.SetCount(output, start + count);
+			Span<Int64> dest = CollectionsMarshal.AsSpan(output).Slice(start, count);
+
+			FillArithmetic(dest, first, step);
+		}
+
+		private static void FillArithmetic(Span<Int64> dest, Int64 first, Int64 step)
+		{
+			Int32 count = dest.Length;
+			Int32 vIdx = 0;
+
+			if (Vector.IsHardwareAccelerated && count >= Vector<Int64>.Count)
+			{
+				Int32 width = Vector<Int64>.Count;
+				Span<Int64> offsetTmp = stackalloc Int64[width];
+				for (Int32 k = 0; k < width; k++)
+					offsetTmp[k] = unchecked(k * step);
+
+				var laneOffsets = new Vector<Int64>(offsetTmp);
+				var strideVec = new Vector<Int64>(unchecked((Int64)width * step));
+				var baseVec = new Vector<Int64>(first);
+				unchecked { baseVec += laneOffsets; }
+
+				Int32 limit = count - width;
+				for (; vIdx <= limit; vIdx += width)
+				{
+					baseVec.CopyTo(dest.Slice(vIdx, width));
+					unchecked { baseVec += strideVec; }
+				}
+			}
+
+			Int64 current = unchecked(first + (Int64)vIdx * step);
+			for (Int32 i = vIdx; i < count; ++i)
+			{
+				dest[i] = current;
+				current = unchecked(current + step);
 			}
 		}
 
@@ -792,7 +916,7 @@ public static class BlockedInteger
 
 			foreach (Int64 delta in block.Deltas)
 			{
-				output.Add(block.Reference + delta);
+				output.Add(unchecked(block.Reference + delta));
 			}
 		}
 
@@ -814,12 +938,17 @@ public static class BlockedInteger
 			}
 		}
 
+		internal static void DecodeBitPackedBaseline(PbBitPackedBlock block, List<Int64> output)
+		{
+			UnpackBitsScalar(block, output);
+		}
+
 		public static void DecodeBitPacked(PbBitPackedBlock block, List<Int64> output)
 		{
 			UnpackBits(block, output);
 		}
 
-		private static void UnpackBits(PbBitPackedBlock block, List<Int64> output)
+		internal static void UnpackBitsScalar(PbBitPackedBlock block, List<Int64> output)
 		{
 			ReadOnlySpan<byte> data = block.PackedData.Span;
 			Int32 bitWidth = (Int32)block.BitWidth;
@@ -840,6 +969,57 @@ public static class BlockedInteger
 				}
 				output.Add(unchecked(min + (Int64)value));
 			}
+		}
+
+		private static void UnpackBits(PbBitPackedBlock block, List<Int64> output)
+		{
+			ReadOnlySpan<byte> data = block.PackedData.Span;
+			Int32 bitWidth = (Int32)block.BitWidth;
+			Int32 count = (Int32)block.Count;
+			Int64 min = block.MinValue;
+
+			if (count == 0 || bitWidth > 57)
+			{
+				UnpackBitsScalar(block, output);
+				return;
+			}
+
+			UInt64 mask = (1UL << bitWidth) - 1;
+			Int32 start = output.Count;
+			CollectionsMarshal.SetCount(output, start + count);
+			Span<Int64> dest = CollectionsMarshal.AsSpan(output).Slice(start, count);
+
+			Int32 safeCount = ComputeSafeCount(data.Length, count, bitWidth);
+
+			// 빠른 경로: 64비트 슬라이딩 윈도우
+			for (Int32 i = 0; i < safeCount; i++)
+			{
+				Int32 bitOffset = i * bitWidth;
+				UInt64 raw = BinaryPrimitives.ReadUInt64LittleEndian(data.Slice(bitOffset >> 3));
+				dest[i] = unchecked(min + (Int64)((raw >> (bitOffset & 7)) & mask));
+			}
+
+			// tail: 기존 스칼라
+			Int32 bitIdx = safeCount * bitWidth;
+			for (Int32 i = safeCount; i < count; i++)
+			{
+				UInt64 value = 0;
+				for (Int32 b = 0; b < bitWidth; b++)
+				{
+					if ((data[bitIdx >> 3] & (1 << (bitIdx & 7))) != 0)
+						value |= 1UL << b;
+					bitIdx++;
+				}
+				dest[i] = unchecked(min + (Int64)value);
+			}
+		}
+
+		private static Int32 ComputeSafeCount(Int32 dataLength, Int32 count, Int32 bitWidth)
+		{
+			if (dataLength < 8) return 0;
+			Int64 safeBitLimit = (Int64)(dataLength - 8) * 8 + 7;
+			Int32 safe = (Int32)(safeBitLimit / bitWidth) + 1;
+			return Math.Min(count, Math.Max(0, safe));
 		}
 	}
 
@@ -1320,48 +1500,50 @@ public static class BlockedInteger
 		{
 			if (_buffer.Count == 0) return;
 
+			ReadOnlySpan<Int64> bufferSpan = CollectionsMarshal.AsSpan(_buffer);
+
 			if (_isConstant && _buffer.Count >= RepeatableBlockMinCount)
 			{
-				proto.Blocks.Add(Encoders.EncodeConstant(_buffer));
+				proto.Blocks.Add(Encoders.EncodeConstant(bufferSpan));
 			}
 			else if (_isArithmetic && _buffer.Count >= RepeatableBlockMinCount)
 			{
-				proto.Blocks.Add(Encoders.EncodeArithmetic(_buffer));
+				proto.Blocks.Add(Encoders.EncodeArithmetic(bufferSpan));
 			}
 			else if (_isStrictlyAscending
 				&& _buffer.Count >= BitmapBlockMinCount
 				&& (_max - _min) <= BitmapBlockRange)
 			{
-				proto.Blocks.Add(Encoders.EncodeAscendingBitmap(_buffer));
+				proto.Blocks.Add(Encoders.EncodeAscendingBitmap(bufferSpan));
 			}
 			else if (_isAscending)
 			{
-				proto.Blocks.Add(Encoders.EncodeAscending(_buffer));
+				proto.Blocks.Add(Encoders.EncodeAscending(bufferSpan));
 			}
 			else if (_isStrictlyDescending
 				&& _buffer.Count >= BitmapBlockMinCount
 				&& (_max - _min) <= BitmapBlockRange)
 			{
-				proto.Blocks.Add(Encoders.EncodeDescendingBitmap(_buffer));
+				proto.Blocks.Add(Encoders.EncodeDescendingBitmap(bufferSpan));
 			}
 			else if (_isDescending)
 			{
-				proto.Blocks.Add(Encoders.EncodeDescending(_buffer));
+				proto.Blocks.Add(Encoders.EncodeDescending(bufferSpan));
 			}
 			else if (_maxAbsDod <= (UInt64)DeltaOfDeltaSelectThreshold
 				&& _buffer.Count >= DeltaOfDeltaBlockMinCount)
 			{
 				// 비단조이고 delta-of-delta가 매우 작음 → DeltaOfDeltaBlock (DeltaBlock보다 더 효율적)
-				proto.Blocks.Add(Encoders.EncodeDeltaOfDelta(_buffer));
+				proto.Blocks.Add(Encoders.EncodeDeltaOfDelta(bufferSpan));
 			}
 			else if (unchecked((UInt64)(_max - _min)) <= (UInt64)DeltaBlockMax)
 			{
-				proto.Blocks.Add(Encoders.EncodeDelta(_buffer, _min, _max));
+				proto.Blocks.Add(Encoders.EncodeDelta(bufferSpan, _min, _max));
 			}
 			else
 			{
 				// range > 16382 → BitPackedBlock
-				proto.Blocks.Add(Encoders.EncodeBitPacked(_buffer, _min, _max));
+				proto.Blocks.Add(Encoders.EncodeBitPacked(bufferSpan, _min, _max));
 			}
 
 			Reset();
