@@ -27,12 +27,12 @@
 |---|---|---|---|---|
 | 1 | **ConstantBlock** | 모든 값 동일, count ≥ 3 | (value, count) | 극대 |
 | 2 | **ArithmeticBlock** | 등차수열, count ≥ 3 | (first, step, count) | 극대 |
-| 3 | **AscendingBitmapBlock** | strictly ascending, range ≤ 63, count ≥ 10 | first + uint64 bits | 높음 |
+| 3 | **AscendingBitmapBlock** | strictly ascending ∧ range ≤ 63 ∧ count ≥ 10 | first + uint64 bits | 높음 |
 | 4 | **AscendingBlock** | 단조증가 (비내림차순) | first + uint64 diffs[] | 중상 |
-| 5 | **DescendingBitmapBlock** | strictly descending, range ≤ 63, count ≥ 10 | first + uint64 bits | 높음 |
+| 5 | **DescendingBitmapBlock** | strictly descending ∧ range ≤ 63 ∧ count ≥ 10 | first + uint64 bits | 높음 |
 | 6 | **DescendingBlock** | 단조감소 (비오름차순) | first + uint64 diffs[] | 중상 |
-| 7 | **DeltaOfDeltaBlock** | 거의 등차 (max\|dod\| ≤ 31) | first + first_delta + sint64 dods[] | 중상 |
-| 8 | **DeltaBlock** | 범용 (range ≤ 8,191) | reference + sint64 deltas[] | 중하 |
+| 7 | **DeltaOfDeltaBlock** | max\|dod\| ≤ 31 ∧ count ≥ 6 | first + first_delta + sint64 dods[] | 중상 |
+| 8 | **DeltaBlock** | range ≤ 8,191 (기본값) | reference + sint64 deltas[] | 중하 |
 
 ### 설계 원칙
 
