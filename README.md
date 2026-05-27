@@ -70,18 +70,21 @@ BlockedInteger.DecodePage(proto, pageIndex, pageSize, out var page);
 
 ### 사용 예
 
-**기본 사용**:
+**기본 사용 (3가지 블록 타입)**:
 ```csharp
-Int64[] values = [5, 5, 5, -20000, -19990, -19985, 5, 0, 3, -1];
+Int64[] input = [9000, 9001, 9002, -10001, -10006, -10009, 100, 100, 100];
 
-BlockedInteger.Encode(values, out var proto);
-// → 3개 블록으로 자동 분할:
-//   Block 0: ConstantBlock (값=5, count=3)
-//   Block 1: DescendingBlock (5 → -20000 → -19990 → -19985)
-//   Block 2: DeltaBlock (비단조: 5, 0, 3, -1)
+BlockedInteger.Encode(input, out var proto);
+// → 3개 블록으로 자동 분할 (그리디 스트리밍 알고리즘):
+//   Block 0: ArithmeticBlock [9000, 9001, 9002]
+//     (first=9000, step=1, count=3)
+//   Block 1: DescendingBlock [-10001, -10006, -10009]
+//     (first=-10001, diffs=[5, 3])
+//   Block 2: ConstantBlock [100, 100, 100]
+//     (value=100, count=3)
 
 BlockedInteger.Decode(proto, out var decoded);
-// → [5, 5, 5, -20000, -19990, -19985, 5, 0, 3, -1]
+// → [9000, 9001, 9002, -10001, -10006, -10009, 100, 100, 100]
 ```
 
 **페이지 기반 스트리밍**:

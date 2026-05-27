@@ -271,12 +271,10 @@ public class BlockedIntegerTests
 	}
 
 	[Test]
-	public async Task BlockSplit_ThreeTypes_DescendingAscendingDelta()
+	public async Task BlockSplit_ThreeTypes()
 	{
-		// 3개 블록 분할: DescendingBlock + AscendingBlock + DeltaBlock
-		// [5,5,5,-20000,-19990,-19985]: 단조감소 → DescendingBlock
-		// [5,0,-1]: 단조증가 후 단조감소 → 역행으로 AscendingBlock (차이 갱신 필요)
-		Int64[] input = [5, 5, 5, -20000, -19990, -19985, 5, 0, -1, 1];
+		// 세 가지 서로 다른 블록 타입으로 분할되는 시나리오
+		Int64[] input = [9000, 9001, 9002, -10001, -10006, -10009, 100, 100, 100];
 		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
 
@@ -284,8 +282,78 @@ public class BlockedIntegerTests
 
 		// Round-trip 정확성 보장
 		await Assert.That(result).IsEquivalentTo(input.ToList());
-		// 반드시 3개 블록으로 분할 (단조감소 + 재배열 + 비단조)
-		await Assert.That(proto.Blocks.Count).IsGreaterThanOrEqualTo(2);
+
+		// 3개 블록으로 분할: Arithmetic(3)
+		await Assert.That(proto.Blocks.Count).IsEqualTo(3);
+
+		// Block 0: [9000, 9001, 9002] → Arithmetic 블록
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Arithmetic);
+		await Assert.That(proto.Blocks[0].Arithmetic.First).IsEqualTo(9000L);
+		await Assert.That(proto.Blocks[0].Arithmetic.Step).IsEqualTo(1L);
+		await Assert.That(proto.Blocks[0].Arithmetic.Count).IsEqualTo(3);
+
+		// Block 1: [-10001, -10006, -10009] → Descending 블록
+		await Assert.That(proto.Blocks[1].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Descending);
+		await Assert.That(proto.Blocks[1].Descending.First).IsEqualTo(-10001L);
+		await Assert.That(proto.Blocks[1].Descending.Diffs.Count).IsEqualTo(2);
+		await Assert.That((Int64)proto.Blocks[1].Descending.Diffs[0]).IsEqualTo(5L);
+		await Assert.That((Int64)proto.Blocks[1].Descending.Diffs[1]).IsEqualTo(3L);
+
+		// Block 2: [100, 100, 100] → Constant 블록
+		await Assert.That(proto.Blocks[2].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Constant);
+		await Assert.That(proto.Blocks[2].Constant.Value).IsEqualTo(100L);
+		await Assert.That(proto.Blocks[2].Constant.Count).IsEqualTo(3);
+	}
+
+	[Test]
+	public async Task BlockSplit_ThreeTypes_OneRemovedVariant()
+	{
+		// 1을 하나 제거한 변형: 동일한 블록 구조 확인
+		// 원본: [1, 1, 1, 1, 1, 9300, 9200, 9100, 5, 10, 15] (3 블록)
+		// 변형: [1, 1, 1, 1, 9300, 9200, 9100, 5, 10, 15] (동일한 3 블록)
+		Int64[] input = [1, 1, 1, 1, 9300, 9200, 9100, 5, 10, 15];
+		BlockedInteger.Encode(input, out var proto);
+		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
+		// Round-trip 정확성 보장
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+		// 동일한 3개 블록 구조 (범위 > 8191 조건 만족)
+		await Assert.That(proto.Blocks.Count).IsEqualTo(3);
+		// 동일한 블록 타입 검증
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
+		await Assert.That(proto.Blocks[1].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Descending);
+		await Assert.That(proto.Blocks[2].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
+	}
+
+	[Test]
+	public async Task BlockSplit_TwoTypes_AllRemoved()
+	{
+		// 1을 모두 제거한 경우: 2개 블록으로 축소
+		// 원본: [1, 1, 1, 1, 1, 9300, 9200, 9100, 5, 10, 15] (3 블록)
+		// 변형: [9300, 9200, 9100, 5, 10, 15] (2 블록만 예상)
+		// 이유: [5, 10, 15]의 범위 = 10 < 8191, 아래로 내림차순 흡수됨
+		Int64[] input = [9300, 9200, 9100, 5, 10, 15];
+		BlockedInteger.Encode(input, out var proto);
+		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
+		// Round-trip 정확성 보장
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+		// 2개 블록으로 축소됨 (범위는 여전히 > 8191이지만 패턴이 다름)
+		await Assert.That(proto.Blocks.Count).IsEqualTo(2);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Descending);
+		await Assert.That(proto.Blocks[1].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
 	}
 
 	// ─── 특수 입력 ───
