@@ -70,7 +70,7 @@ BlockedInteger.DecodePage(proto, pageIndex, pageSize, out var page);
 
 ### 사용 예
 
-**기본 사용 (3가지 블록 타입)**:
+**기본 사용**:
 ```csharp
 Int64[] input = [9000, 9001, 9002, -10001, -10006, -10009, 100, 100, 100];
 
