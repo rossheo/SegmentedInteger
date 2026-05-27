@@ -109,18 +109,10 @@ message BlockedInteger
 			enum RangeLimit
 			{
 				RangeLimit_None = 0;
-				RangeLimit_Max = 16382;
+				RangeLimit_Max = 8191;
 			}
 			sint64 reference = 1;
 			repeated sint64 deltas = 2;
-		}
-
-		message BitPackedBlock
-		{
-			sint64 min_value = 1;
-			uint32 bit_width = 2;
-			uint32 count = 3;
-			bytes packed_data = 4;
 		}
 
 		oneof block_oneof
@@ -133,7 +125,6 @@ message BlockedInteger
 			DescendingBlock descending = 6;
 			DeltaOfDeltaBlock delta_of_delta = 7;
 			DeltaBlock delta = 8;
-			BitPackedBlock bit_packed = 9;
 		}
 	}
 

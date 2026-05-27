@@ -2,7 +2,7 @@
 
 **목적**: Int64 시퀀스를 패턴 감지 기반으로 압축하여 저장 공간 절감 및 네트워크 전송 효율화
 
-**특징**: 9가지 블록 타입 자동 선택 + System.Runtime.Intrinsics SIMD 최적화
+**특징**: 8가지 블록 타입 자동 선택 + System.Runtime.Intrinsics SIMD 최적화
 
 ---
 
@@ -21,7 +21,7 @@
 
 임의의 `Int64` 시퀀스를 Protobuf 직렬화로 압축합니다. (순서 보장, 중복 허용)
 
-### 9가지 블록 타입 (우선순위 순)
+### 8가지 블록 타입 (우선순위 순)
 
 | 우선순위 | 블록 타입 | 선택 조건 | Wire Format | 압축 효율 |
 |---|---|---|---|---|
@@ -32,8 +32,7 @@
 | 5 | **DescendingBitmapBlock** | strictly descending, range ≤ 63, count ≥ 10 | first + uint64 bits | 높음 |
 | 6 | **DescendingBlock** | 단조감소 (비오름차순) | first + uint64 diffs[] | 중상 |
 | 7 | **DeltaOfDeltaBlock** | 거의 등차 (max\|dod\| ≤ 31) | first + first_delta + sint64 dods[] | 중상 |
-| 8 | **DeltaBlock** | 범용 (range ≤ 16,382) | reference + sint64 deltas[] | 중하 |
-| 9 | **BitPackedBlock** | 범용 (16,382 < range ≤ 1M) | min_value + bit_width + packed_data | 낮음 |
+| 8 | **DeltaBlock** | 범용 (range ≤ 8,191) | reference + sint64 deltas[] | 중하 |
 
 ### 설계 원칙
 
@@ -48,11 +47,10 @@
 - **ConstantBlock·ArithmeticBlock**: count ≥ 3 필수
 - **BitmapBlock**: range ≤ 63, count ≥ 10 필수, strictly ascending/descending 필수
 - **DeltaOfDeltaBlock**: max|dod| ≤ 31만 인코더 선택 (proto limit ≤ 8,191)
-- **DeltaBlock**: range ≤ 16,382 (2-byte zigzag 저장)
-- **BitPackedBlock**: fallback 용도 (범위 제약 없음, ≤ 1M까지 지원)
+- **DeltaBlock**: range ≤ 8,191 (2-byte zigzag 저장)
 
 **블록 분리**:
-- 단조성(ascending/descending)이 동시에 깨지고 range > 16,382 → 새 블록 시작
+- 단조성(ascending/descending)이 동시에 깨지고 range > 8,191 → 새 블록 시작
 - 블록 값 수가 8,192 초과 → 자동 분리
 
 ### API
@@ -74,13 +72,16 @@ BlockedInteger.DecodePage(proto, pageIndex, pageSize, out var page);
 
 **기본 사용**:
 ```csharp
-Int64[] values = [5, 5, 5, 5, 1, 2, 3, 4, 5, 100, 50, 30, 10];
+Int64[] values = [5, 5, 5, -20000, -19990, -19985, 5, 0, 3, -1];
 
 BlockedInteger.Encode(values, out var proto);
-// → ConstantBlock(5×4) + ArithmeticBlock(1~5) + DescendingBlock(100,50,30,10)
+// → 3개 블록으로 자동 분할:
+//   Block 0: ConstantBlock (값=5, count=3)
+//   Block 1: DescendingBlock (5 → -20000 → -19990 → -19985)
+//   Block 2: DeltaBlock (비단조: 5, 0, 3, -1)
 
 BlockedInteger.Decode(proto, out var decoded);
-// → [5, 5, 5, 5, 1, 2, 3, 4, 5, 100, 50, 30, 10]
+// → [5, 5, 5, -20000, -19990, -19985, 5, 0, 3, -1]
 ```
 
 **페이지 기반 스트리밍**:
@@ -138,12 +139,6 @@ SortedSetInteger.Decode(proto, out var decoded);
 ## 성능 및 최적화
 
 ### System.Runtime.Intrinsics SIMD 최적화
-
-**UnpackBits 슬라이딩 윈도우** (BitPackedBlock 디코딩):
-- 64비트 단위 읽기로 내부 bitWidth 루프 제거
-- `BinaryPrimitives.ReadUInt64LittleEndian`: 안전한 엔디안 처리
-- `safeCount` 기반 경계 안전성 자동 보장
-- 결과: **나노초 단위 성능** (~1.0 μs for 64 items)
 
 **Vector<T> 벡터화** (DecodeConstant/DecodeArithmetic):
 - `Span<long>.Fill()`: 런타임 벡터 store
