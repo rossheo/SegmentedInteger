@@ -2,7 +2,7 @@
 
 **목적**: Int64 시퀀스를 패턴 감지 기반으로 압축하여 저장 공간 절감 및 네트워크 전송 효율화
 
-**특징**: 8가지 블록 타입 자동 선택 + System.Runtime.Intrinsics SIMD 최적화
+**특징**: 8가지 블록 타입 자동 선택
 
 ---
 
@@ -27,9 +27,9 @@
 |---|---|---|---|---|
 | 1 | **ConstantBlock** | 모든 값 동일, count ≥ 3 | (value, count) | 극대 |
 | 2 | **ArithmeticBlock** | 등차수열, count ≥ 3 | (first, step, count) | 극대 |
-| 3 | **AscendingBitmapBlock** | strictly ascending ∧ range ≤ 63 ∧ count ≥ 10 | first + uint64 bits | 높음 |
+| 3 | **AscendingBitmapBlock** | strictly ascending ∧ range ≤ 63 ∧ count ≥ 8 | first + uint64 bits | 높음 |
 | 4 | **AscendingBlock** | 단조증가 (비내림차순) | first + uint64 diffs[] | 중상 |
-| 5 | **DescendingBitmapBlock** | strictly descending ∧ range ≤ 63 ∧ count ≥ 10 | first + uint64 bits | 높음 |
+| 5 | **DescendingBitmapBlock** | strictly descending ∧ range ≤ 63 ∧ count ≥ 8 | first + uint64 bits | 높음 |
 | 6 | **DescendingBlock** | 단조감소 (비오름차순) | first + uint64 diffs[] | 중상 |
 | 7 | **DeltaOfDeltaBlock** | max\|dod\| ≤ 31 ∧ count ≥ 6 | first + first_delta + sint64 dods[] | 중상 |
 | 8 | **DeltaBlock** | range ≤ 8,191 (기본값) | reference + sint64 deltas[] | 중하 |
@@ -45,7 +45,7 @@
 **주요 제약조건**:
 - **블록당 값 수**: 최대 8,192개 (proto spec 준수)
 - **ConstantBlock·ArithmeticBlock**: count ≥ 3 필수
-- **BitmapBlock**: range ≤ 63, count ≥ 10 필수, strictly ascending/descending 필수
+- **BitmapBlock**: range ≤ 63, count ≥ 8 필수, strictly ascending/descending 필수
 - **DeltaOfDeltaBlock**: max|dod| ≤ 31만 인코더 선택 (proto limit ≤ 8,191)
 - **DeltaBlock**: range ≤ 8,191 (2-byte zigzag 저장)
 
@@ -138,11 +138,15 @@ SortedSetInteger.Decode(proto, out var decoded);
 
 ## 성능 및 최적화
 
-### System.Runtime.Intrinsics SIMD 최적화
+### System.Numerics Vector 기반 SIMD 최적화
 
-**Vector<T> 벡터화** (DecodeConstant/DecodeArithmetic):
-- `Span<long>.Fill()`: 런타임 벡터 store
+**DecodeConstant**: `Span<long>.Fill()` (런타임 벡터화)
+- 반복 값 채우기 시 런타임이 자동 벡터화
+
+**DecodeArithmetic**: `Vector<T>` 명시적 벡터화 (FillArithmetic)
 - 플랫폼 자동 선택: AVX2(width=4) / NEON(width=2) / AVX-512(width=8)
+- `Vector.IsHardwareAccelerated` 확인 후 벡터 연산 사용
+- 꼬리(tail) 처리: 벡터화 후 남은 요소는 스칼라로 처리
 - `unchecked()` 블록: CheckForOverflowUnderflow=true 대응
 
 **CollectionsMarshal 버퍼 관리**:
