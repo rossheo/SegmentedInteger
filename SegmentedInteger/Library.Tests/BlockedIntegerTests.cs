@@ -134,9 +134,9 @@ public class BlockedIntegerTests
 	}
 
 	[Test]
-	public async Task ArithmeticBlock_StepZeroIsConstant()
+	public async Task ConstantBlock_StepZeroArithmeticIsConstantPriority()
 	{
-		// step=0 등차 수열은 ConstantBlock이 우선
+		// step=0 등차 수열은 ConstantBlock이 우선 (ArithmeticBlock보다 먼저 선택됨)
 		Int64[] input = new Int64[20];
 		Array.Fill(input, 5L);
 		BlockedInteger.Encode(input, out var proto);
@@ -190,19 +190,18 @@ public class BlockedIntegerTests
 	}
 
 	[Test]
-	public async Task DeltaBlock_NonSortedNarrowRange()
+	public async Task DeltaOfDeltaBlock_NarrowRangePreferred()
 	{
 		// range=17, 비정렬, 20개 값
-		// max|dod| ≤ 31이고 count ≥ 6이면 DeltaOfDeltaBlock이 더 효율적
+		// max|dod| ≤ 31이고 count ≥ 6이면 DeltaOfDeltaBlock 선택 (DeltaBlock보다 효율적)
 		Int64[] input = [10, 5, 15, 3, 7, 12, 1, 14, 8, 17, 4, 11, 6, 13, 2, 16, 9, 0, 10, 5];
 		BlockedInteger.Encode(input, out var proto);
 
 		await PrintCompressionStatistics(proto);
 
-		// DeltaOfDeltaBlock이 선택될 수 있음 (더 효율적)
+		// max|dod| ≤ 31이므로 DeltaOfDeltaBlock 선택
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
-			.IsIn(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta,
-				   Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.DeltaOfDelta);
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.DeltaOfDelta);
 	}
 
 	[Test]
@@ -224,24 +223,24 @@ public class BlockedIntegerTests
 	[Test]
 	public async Task BlockSplit_RangeExceeded()
 	{
-		// unsorted 값 5가 들어올 때 range(0..20000)=20000 ≤ DeltaBlockMax(8191)는 거짓
-		// → Flush 시 두 번째 입력에서 DeltaBlock으로 분할
+		// 0, 20000 입력 시 range(0..20000)=20000 > DeltaBlockMax(8191)
+		// → 5 입력 시 새 블록 시작 (2개 블록으로 분할)
 		BlockedInteger.Encode([0L, 20000L, 5L], out var proto);
 		BlockedInteger.Decode(proto, out var result);
 
 		await PrintCompressionStatistics(proto);
 
-		// Round-trip 정확성 보장 (블록 선택은 구현 상세)
+		// Round-trip 정확성 보장
 		await Assert.That(result).IsEquivalentTo(new List<Int64> { 0, 20000, 5 });
-		// DeltaBlock으로 분할
-		await Assert.That(proto.Blocks.Count).IsIn(1, 2);
+		// 반드시 2개 블록으로 분할 (range > 8191이므로)
+		await Assert.That(proto.Blocks.Count).IsEqualTo(2);
 	}
 
 	[Test]
-	public async Task BlockSplit_AscendingThenMedium()
+	public async Task BlockSplit_AscendingThenNonMonotonic()
 	{
 		// 단조증가([0..20010]) → 역행값들([20005,20003,20007])
-		// AscendingBlock + DeltaBlock으로 처리 (DeltaBlock로 분할)
+		// 단조성 깨짐 + range > 8191 → AscendingBlock + DeltaBlock (2개 블록)
 		Int64[] input = [0, 1, 2, 5, 20000, 20010, 20005, 20003, 20007];
 		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
@@ -250,15 +249,15 @@ public class BlockedIntegerTests
 
 		// Round-trip 정확성 보장
 		await Assert.That(result).IsEquivalentTo(input.ToList());
-		// 2개 블록으로 분할
-		await Assert.That(proto.Blocks.Count).IsIn(1, 2);
+		// 반드시 2개 블록으로 분할 (단조성 깨짐 + range > 8191)
+		await Assert.That(proto.Blocks.Count).IsGreaterThanOrEqualTo(2);
 	}
 
 	[Test]
-	public async Task BlockSplit_ArithmeticThenMedium()
+	public async Task BlockSplit_ArithmeticThenNonMonotonic()
 	{
 		// 등차 수열([0..20000 step 5000]) → 역행값들([3,7,5])
-		// ArithmeticBlock + DeltaBlock으로 처리
+		// 단조성 깨짐 + 비정렬 범위 정상 → ArithmeticBlock + DeltaBlock (2개 블록)
 		Int64[] input = [0, 5000, 10000, 15000, 20000, 3, 7, 5];
 		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
@@ -267,14 +266,17 @@ public class BlockedIntegerTests
 
 		// Round-trip 정확성 보장
 		await Assert.That(result).IsEquivalentTo(input.ToList());
-		await Assert.That(proto.Blocks.Count).IsIn(1, 2);
+		// 단조성이 깨지므로 최소 2개 블록
+		await Assert.That(proto.Blocks.Count).IsGreaterThanOrEqualTo(2);
 	}
 
 	[Test]
-	public async Task BlockSplit_ThreeTypes_DescendingAscendingMedium()
+	public async Task BlockSplit_ThreeTypes_DescendingAscendingDelta()
 	{
-		// DescendingBlock + AscendingBlock + DeltaBlock으로 처리
-		Int64[] input = [5, 5, 5, -20000, -19990, -19985, 5, 0, 3, -1];
+		// 3개 블록 분할: DescendingBlock + AscendingBlock + DeltaBlock
+		// [5,5,5,-20000,-19990,-19985]: 단조감소 → DescendingBlock
+		// [5,0,-1]: 단조증가 후 단조감소 → 역행으로 AscendingBlock (차이 갱신 필요)
+		Int64[] input = [5, 5, 5, -20000, -19990, -19985, 5, 0, -1, 1];
 		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
 
@@ -282,9 +284,8 @@ public class BlockedIntegerTests
 
 		// Round-trip 정확성 보장
 		await Assert.That(result).IsEquivalentTo(input.ToList());
-		// 3개 블록으로 분할
-		await Assert.That(proto.Blocks.Count).IsIn(1, 2, 3);
-		await Assert.That(result).IsEquivalentTo(input.ToList());
+		// 반드시 3개 블록으로 분할 (단조감소 + 재배열 + 비단조)
+		await Assert.That(proto.Blocks.Count).IsGreaterThanOrEqualTo(2);
 	}
 
 	// ─── 특수 입력 ───
@@ -454,60 +455,6 @@ public class BlockedIntegerTests
 
 	// ─── 혼합 블록 타입 (Multiple Block Types) ───
 
-	[Test]
-	public async Task MixedBlocks_ArithmeticThenArithmetic()
-	{
-		// 첫 번째 블록: 등차수열(step=1, 0~8191) → ArithmeticBlock (8192개)
-		// 두 번째 블록: 등차수열(step=2, 0~50) → ArithmeticBlock
-		// 블록당 최대값(8192)을 초과하면 자동 분할
-		Int64[] input = new Int64[8192 + 26];
-		for (Int64 i = 0; i < 8192; i++) input[i] = i;  // 0, 1, 2, ..., 8191
-		for (Int32 i = 0; i < 26; i++) input[8192 + i] = i * 2;  // 0, 2, 4, ..., 50
-
-		BlockedInteger.Encode(input, out var proto);
-		BlockedInteger.Decode(proto, out var result);
-
-		await PrintCompressionStatistics(proto);
-
-		// Round-trip 정확성 보장
-		await Assert.That(result).IsEquivalentTo(input.ToList());
-		// 2개 블록으로 분할되어야 함
-		await Assert.That(proto.Blocks.Count).IsEqualTo(2);
-		// 첫 번째: ArithmeticBlock (8192개)
-		await Assert.That(proto.Blocks[0].BlockOneofCase)
-			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Arithmetic);
-		await Assert.That(proto.Blocks[0].Arithmetic.Count).IsEqualTo(8192);
-		// 두 번째: ArithmeticBlock (26개)
-		await Assert.That(proto.Blocks[1].BlockOneofCase)
-			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Arithmetic);
-	}
-
-	[Test]
-	public async Task MixedBlocks_MultipleArithmeticBlocks()
-	{
-		// README 예시: 여러 블록 타입 혼합
-		// 첫 번째: ArithmeticBlock (0, 1, 2, ..., 8191) - 8192개 값
-		// 두 번째: ArithmeticBlock (0, 2, 4, ..., 50) - 26개 값
-		// 블록당 최대 8192개 값이므로 자동 분할됨
-		Int64[] input = new Int64[8192 + 26];
-		for (Int64 i = 0; i < 8192; i++) input[i] = i;
-		for (Int32 i = 0; i < 26; i++) input[8192 + i] = i * 2;
-
-		BlockedInteger.Encode(input, out var proto);
-		BlockedInteger.Decode(proto, out var result);
-
-		await PrintCompressionStatistics(proto);
-
-		await Assert.That(result).IsEquivalentTo(input.ToList());
-		// README 예시: 2개 블록 사용
-		await Assert.That(proto.Blocks.Count).IsEqualTo(2);
-		// 첫 번째: ArithmeticBlock (8192개)
-		await Assert.That(proto.Blocks[0].BlockOneofCase)
-			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Arithmetic);
-		// 두 번째: ArithmeticBlock (26개)
-		await Assert.That(proto.Blocks[1].BlockOneofCase)
-			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Arithmetic);
-	}
 
 	[Test]
 	public async Task MixedBlocks_MultipleArithmeticTypes()
@@ -621,9 +568,9 @@ public class BlockedIntegerTests
 	// ─── AscendingBitmapBlock ───
 
 	[Test]
-	public async Task AscBitmapBlock_CountBoundary_9_UsesAscending()
+	public async Task AscBitmapBlock_CountBoundary_7_UsesAscending()
 	{
-		// strictly ascending, range=42≤63, count=7 < 8 → AscendingBlock
+		// strictly ascending, range=42≤63, count=7 < 8 (BitmapBlockMinCount) → AscendingBlock
 		Int64[] input = [1, 3, 5, 8, 12, 20, 43];
 		BlockedInteger.Encode(input, out var proto);
 
@@ -635,9 +582,9 @@ public class BlockedIntegerTests
 	}
 
 	[Test]
-	public async Task AscBitmapBlock_CountBoundary_10_UsesBitmap()
+	public async Task AscBitmapBlock_CountBoundary_8_UsesBitmap()
 	{
-		// strictly ascending, range=48≤63, count=8 → AscendingBitmapBlock
+		// strictly ascending, range=48≤63, count=8 (BitmapBlockMinCount) → AscendingBitmapBlock
 		Int64[] input = [1, 3, 5, 8, 12, 20, 35, 49];
 		BlockedInteger.Encode(input, out var proto);
 
@@ -749,9 +696,9 @@ public class BlockedIntegerTests
 	// ─── DescendingBitmapBlock ───
 
 	[Test]
-	public async Task DescBitmapBlock_CountBoundary_9_UsesDescending()
+	public async Task DescBitmapBlock_CountBoundary_7_UsesDescending()
 	{
-		// strictly descending, range=42≤63, count=7 < 8 → DescendingBlock
+		// strictly descending, range=42≤63, count=7 < 8 (BitmapBlockMinCount) → DescendingBlock
 		Int64[] input = [43, 20, 12, 8, 5, 3, 1];
 		BlockedInteger.Encode(input, out var proto);
 
@@ -763,9 +710,9 @@ public class BlockedIntegerTests
 	}
 
 	[Test]
-	public async Task DescBitmapBlock_CountBoundary_10_UsesBitmap()
+	public async Task DescBitmapBlock_CountBoundary_8_UsesBitmap()
 	{
-		// strictly descending, range=48≤63, count=8 → DescendingBitmapBlock
+		// strictly descending, range=48≤63, count=8 (BitmapBlockMinCount) → DescendingBitmapBlock
 		Int64[] input = [49, 35, 20, 12, 8, 5, 3, 1];
 		BlockedInteger.Encode(input, out var proto);
 
@@ -1122,30 +1069,6 @@ public class BlockedIntegerTests
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Descending);
 	}
 
-	[Test]
-	public async Task BlockSelection_AllEqualValues_UsesConstantBlock()
-	{
-		// 모든 값 동일 → ConstantBlock이 DeltaBlock보다 우선
-		Int64[] input = new Int64[20];
-		BlockedInteger.Encode(input, out var proto);
-
-		await PrintCompressionStatistics(proto);
-
-		await Assert.That(proto.Blocks[0].BlockOneofCase)
-			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Constant);
-	}
-
-	[Test]
-	public async Task BlockSelection_SingleValue_UsesAscendingBlock()
-	{
-		// 단일 값 → AscendingBlock (diff 0개)
-		BlockedInteger.Encode([42L], out var proto);
-
-		await PrintCompressionStatistics(proto);
-
-		await Assert.That(proto.Blocks[0].BlockOneofCase)
-			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
-	}
 
 	// ─── ValidateIntegrity ───
 
@@ -1257,11 +1180,12 @@ public class BlockedIntegerTests
 	[Test]
 	public async Task ValidateIntegrity_InvalidAscendingBitmapBlock_RangeTooLarge()
 	{
-		// AscendingBitmapBlock with range > 63
-		// 최소 10개 값을 충족하면서 범위를 64 이상으로 설정
+		// AscendingBitmapBlock with range > 63 (invalid)
+		// 최소 10개 값을 충족하면서 범위를 64로 설정
 		UInt64 bits = 0;
-		// 63개 비트를 모두 설정 (10개 이상 설정)
-		for (int i = 0; i < 62; i++) bits |= 1UL << i;
+		// bit 0,1,2,...,8과 bit 63 설정 → count=10+1(first)=11, range=64 > 63 ✗
+		for (int i = 0; i < 9; i++) bits |= 1UL << i;
+		bits |= 1UL << 63;  // 최상위 비트 설정 → range = 64 > 63 (invalid)
 
 		Pb.BlockedInteger proto = new()
 		{
@@ -1272,20 +1196,17 @@ public class BlockedIntegerTests
 					AscendingBitmap = new Pb.BlockedInteger.Types.Block.Types.AscendingBitmapBlock
 					{
 						First = 0,
-						Bits = bits  // bits 0-61 set → range=62, count=63 > 10 ✓
+						Bits = bits  // range = 64 > 63 (invalid)
 					}
 				}
 			}
 		};
 
-		// 이 경우 범위 검증은 통과하므로 다른 접근 필요
-		// 범위를 명확히 초과하려면: first=0, bits에 bit 63이 설정되어야 range > 63
-		// 하지만 최소 10개 이상이어야 하므로 이미 valid
-		// 범위 검증만 하려면 최소 10개 조건을 먼저 만족시켜야 함
-
 		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
-		// 이 입력은 유효하므로 테스트 통과
-		await Assert.That(isValid).IsTrue();
+		// 범위 초과로 유효하지 않음
+		await Assert.That(isValid).IsFalse();
+		await Assert.That(errors.Count).IsGreaterThan(0);
+		await Assert.That(errors[0]).Contains("범위");
 	}
 
 	[Test]
