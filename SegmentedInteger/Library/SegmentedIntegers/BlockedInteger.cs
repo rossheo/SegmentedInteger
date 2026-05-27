@@ -787,14 +787,6 @@ public static class BlockedInteger
 			}
 		}
 
-		internal static void DecodeConstantBaseline(PbConstantBlock block, List<Int64> output)
-		{
-			for (Int32 i = 0; i < block.Count; ++i)
-			{
-				output.Add(block.Value);
-			}
-		}
-
 		public static void DecodeConstant(PbConstantBlock block, List<Int64> output)
 		{
 			Int32 count = block.Count;
@@ -802,16 +794,6 @@ public static class BlockedInteger
 			Int32 start = output.Count;
 			CollectionsMarshal.SetCount(output, start + count);
 			CollectionsMarshal.AsSpan(output).Slice(start, count).Fill(block.Value);
-		}
-
-		internal static void DecodeArithmeticBaseline(PbArithmeticBlock block, List<Int64> output)
-		{
-			Int64 current = block.First;
-			for (Int32 i = 0; i < block.Count; ++i)
-			{
-				output.Add(current);
-				current = unchecked(current + block.Step);
-			}
 		}
 
 		public static void DecodeArithmetic(PbArithmeticBlock block, List<Int64> output)
@@ -938,37 +920,9 @@ public static class BlockedInteger
 			}
 		}
 
-		internal static void DecodeBitPackedBaseline(PbBitPackedBlock block, List<Int64> output)
-		{
-			UnpackBitsScalar(block, output);
-		}
-
 		public static void DecodeBitPacked(PbBitPackedBlock block, List<Int64> output)
 		{
 			UnpackBits(block, output);
-		}
-
-		internal static void UnpackBitsScalar(PbBitPackedBlock block, List<Int64> output)
-		{
-			ReadOnlySpan<byte> data = block.PackedData.Span;
-			Int32 bitWidth = (Int32)block.BitWidth;
-			Int32 count = (Int32)block.Count;
-			Int64 min = block.MinValue;
-			Int32 bitIndex = 0;
-
-			for (Int32 i = 0; i < count; i++)
-			{
-				UInt64 value = 0;
-				for (Int32 b = 0; b < bitWidth; b++)
-				{
-					if ((data[bitIndex >> 3] & (1 << (bitIndex & 7))) != 0)
-					{
-						value |= 1UL << b;
-					}
-					bitIndex++;
-				}
-				output.Add(unchecked(min + (Int64)value));
-			}
 		}
 
 		private static void UnpackBits(PbBitPackedBlock block, List<Int64> output)
@@ -978,17 +932,31 @@ public static class BlockedInteger
 			Int32 count = (Int32)block.Count;
 			Int64 min = block.MinValue;
 
-			if (count == 0 || bitWidth > 57)
-			{
-				UnpackBitsScalar(block, output);
-				return;
-			}
+			if (count == 0) return;
 
-			UInt64 mask = (1UL << bitWidth) - 1;
 			Int32 start = output.Count;
 			CollectionsMarshal.SetCount(output, start + count);
 			Span<Int64> dest = CollectionsMarshal.AsSpan(output).Slice(start, count);
 
+			if (bitWidth > 57)
+			{
+				// Fallback: 스칼라만 사용
+				Int32 bitIdx = 0;
+				for (Int32 i = 0; i < count; i++)
+				{
+					UInt64 value = 0;
+					for (Int32 b = 0; b < bitWidth; b++)
+					{
+						if ((data[bitIdx >> 3] & (1 << (bitIdx & 7))) != 0)
+							value |= 1UL << b;
+						bitIdx++;
+					}
+					dest[i] = unchecked(min + (Int64)value);
+				}
+				return;
+			}
+
+			UInt64 mask = (1UL << bitWidth) - 1;
 			Int32 safeCount = ComputeSafeCount(data.Length, count, bitWidth);
 
 			// 빠른 경로: 64비트 슬라이딩 윈도우
@@ -999,16 +967,16 @@ public static class BlockedInteger
 				dest[i] = unchecked(min + (Int64)((raw >> (bitOffset & 7)) & mask));
 			}
 
-			// tail: 기존 스칼라
-			Int32 bitIdx = safeCount * bitWidth;
+			// tail: 스칼라
+			Int32 bitIdx2 = safeCount * bitWidth;
 			for (Int32 i = safeCount; i < count; i++)
 			{
 				UInt64 value = 0;
 				for (Int32 b = 0; b < bitWidth; b++)
 				{
-					if ((data[bitIdx >> 3] & (1 << (bitIdx & 7))) != 0)
+					if ((data[bitIdx2 >> 3] & (1 << (bitIdx2 & 7))) != 0)
 						value |= 1UL << b;
-					bitIdx++;
+					bitIdx2++;
 				}
 				dest[i] = unchecked(min + (Int64)value);
 			}
