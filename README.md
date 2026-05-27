@@ -10,7 +10,7 @@
 
 | 클래스 | 용도 | 입력 | 특징 |
 |---|---|---|---|
-| **BlockedInteger** | 임의의 시계열 데이터 | `IEnumerable<Int64>` | 9가지 블록 타입, 순서·중복 보존, SIMD 최적화 |
+| **BlockedInteger** | 임의의 Int64 데이터 | `IEnumerable<Int64>` | 순서 보장, 중복 허용 |
 | **SortedSetInteger** | 정렬된 집합 (0 포함 양수) | `SortedSet<Int64>` | 2가지 청크 타입, 중복 없음 |
 
 > **개발 순서**: `SortedSetInteger` → `BlockedInteger` (더 범용적인 확장 버전)
