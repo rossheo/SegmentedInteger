@@ -4,35 +4,44 @@ using System.Runtime.CompilerServices;
 
 namespace Library.SegmentedIntegers;
 
-using PbArithmeticBlock = Pb.BlockedInteger.Types.Block.Types.ArithmeticBlock;
-using PbAscendingBitmapBlock = Pb.BlockedInteger.Types.Block.Types.AscendingBitmapBlock;
-using PbAscendingBlock = Pb.BlockedInteger.Types.Block.Types.AscendingBlock;
 using PbBlock = Pb.BlockedInteger.Types.Block;
 using PbBlockedInteger = Pb.BlockedInteger;
 using PbConstantBlock = Pb.BlockedInteger.Types.Block.Types.ConstantBlock;
-using PbDeltaBlock = Pb.BlockedInteger.Types.Block.Types.DeltaBlock;
+using PbArithmeticBlock = Pb.BlockedInteger.Types.Block.Types.ArithmeticBlock;
+using PbAscendingBitmapBlock = Pb.BlockedInteger.Types.Block.Types.AscendingBitmapBlock;
+using PbAscendingBlock = Pb.BlockedInteger.Types.Block.Types.AscendingBlock;
 using PbDescendingBitmapBlock = Pb.BlockedInteger.Types.Block.Types.DescendingBitmapBlock;
 using PbDescendingBlock = Pb.BlockedInteger.Types.Block.Types.DescendingBlock;
+using PbDeltaOfDeltaBlock = Pb.BlockedInteger.Types.Block.Types.DeltaOfDeltaBlock;
+using PbDeltaBlock = Pb.BlockedInteger.Types.Block.Types.DeltaBlock;
+using PbBitPackedBlock = Pb.BlockedInteger.Types.Block.Types.BitPackedBlock;
 
 /// <summary>
-/// 임의의 Int64 시퀀스를 패턴 감지 블록 방식으로 압축:
+/// 임의의 Int64 시퀀스를 패턴 감지 블록 방식으로 압축 (9 block types):
 /// - ConstantBlock:         모든 값 동일 (count ≥ 3) → (value, count)
 /// - ArithmeticBlock:       등차 수열 (count ≥ 3) → (first, step, count)
 /// - AscendingBitmapBlock:  strictly ascending, range ≤ 63, count ≥ 10 → first + uint64 bits
 /// - AscendingBlock:        단조증가(비내림차순) → first + repeated uint64 diffs (≤8191개)
 /// - DescendingBitmapBlock: strictly descending, range ≤ 63, count ≥ 10 → first + uint64 bits
 /// - DescendingBlock:       단조감소(비오름차순) → first + repeated uint64 diffs (≤8191개)
-/// - DeltaBlock:            range ≤ 16,382 → midpoint + sint64 deltas (≤2-byte zigzag)
+/// - DeltaOfDeltaBlock:     nearly-arithmetic (encoder: max|dod| ≤ 31, proto limit: ≤ 8,191) → first + first_delta + sint64 dods
+/// - DeltaBlock:            range ≤ 16,382 → reference + sint64 deltas (≤2-byte zigzag)
+/// - BitPackedBlock:        16,382 < range ≤ 1M → min_value + bit_width + packed bits
 /// <para>
-/// 이 인코딩은 deterministic — 같은 입력은 항상 같은 byte 시퀀스를 생성합니다.
-/// 블록 타입 dispatcher 우선순위·분기 조건을 변경하면 byte 호환성이 깨집니다.
+/// 인코딩은 deterministic(입력 동일 → 출력 동일)이며 greedy 방식으로 동작합니다.
+/// BlockAccumulator는 스트리밍 방식으로 최적 블록 타입을 선택하되 백트래킹을 하지 않으므로,
+/// 약간의 조정으로 더 나은 압축률을 얻을 수 있는 경우도 있습니다.
 /// </para>
 /// </summary>
 public static class BlockedInteger
 {
 	private const Int64 DeltaBlockMax = (Int64)PbDeltaBlock.Types.RangeLimit.Max; // 16382
-	private const Int32 MaxBlockValues = 8192;
+	private const Int64 DeltaOfDeltaBlockMax = (Int64)PbDeltaOfDeltaBlock.Types.DeltaLimit.Max; // 8191
+	private const Int64 DeltaOfDeltaSelectThreshold = 31; // 선택 조건: max|dod| ≤ 31 (매우 작은 변동), 아니면 DeltaBlock 사용
+	private const Int64 BitPackedBlockMax = 1_000_000L; // range > 16382인 비단조 데이터, 최대 1M까지 지원
+	private const Int32 MaxBlockValues = 8192; // proto 스펙상 repeated 필드의 합리적 상한; Ascending/Descending diff 저장 capacity
 	private const Int32 RepeatableBlockMinCount = 3;
+	private const Int32 DeltaOfDeltaBlockMinCount = 6; // first + first_delta + 4개 dod 값 이상일 때 효율적
 	private const Int32 BitmapBlockMinCount = 10;
 	private const Int64 BitmapBlockRange = 63;
 
@@ -77,7 +86,10 @@ public static class BlockedInteger
 	public static void Decode(PbBlockedInteger proto, out IReadOnlyList<Int64> integers)
 	{
 		ArgumentNullException.ThrowIfNull(proto);
-		List<Int64> result = [];
+		Int32 totalCount = 0;
+		foreach (PbBlock block in proto.Blocks)
+			totalCount += Decoders.GetBlockValueCount(block);
+		List<Int64> result = new(totalCount);
 
 		foreach (PbBlock block in proto.Blocks)
 		{
@@ -101,8 +113,14 @@ public static class BlockedInteger
 				case PbBlock.BlockOneofOneofCase.Descending:
 					Decoders.DecodeDescending(block.Descending, result);
 					break;
+				case PbBlock.BlockOneofOneofCase.DeltaOfDelta:
+					Decoders.DecodeDeltaOfDelta(block.DeltaOfDelta, result);
+					break;
 				case PbBlock.BlockOneofOneofCase.Delta:
 					Decoders.DecodeDelta(block.Delta, result);
+					break;
+				case PbBlock.BlockOneofOneofCase.BitPacked:
+					Decoders.DecodeBitPacked(block.BitPacked, result);
 					break;
 				default:
 					throw new InvalidOperationException($"Unknown block type: {block.BlockOneofCase}");
@@ -165,7 +183,7 @@ public static class BlockedInteger
 		Int32 startIndex = pageIndex * pageSize;
 		Int32 endIndex = startIndex + pageSize;
 
-		List<Int64> result = [];
+		List<Int64> result = new(pageSize);
 		Int32 currentIndex = 0;
 
 		foreach (PbBlock block in proto.Blocks)
@@ -194,7 +212,7 @@ public static class BlockedInteger
 	/// 블록 구조의 무결성을 검증합니다.
 	/// </summary>
 	/// <param name="proto">검증할 프로토콜 버퍼</param>
-	/// <param name="errors">발견된 에러 메시지 목록 (null인 경우 에러 메시지 생성 안 함)</param>
+	/// <param name="errors">발견된 에러 메시지 목록</param>
 	/// <returns>유효하면 true, 그렇지 않으면 false</returns>
 	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
 	public static bool TryValidate(PbBlockedInteger proto, out List<string> errors)
@@ -307,6 +325,23 @@ public static class BlockedInteger
 			return new() { Descending = block };
 		}
 
+		public static PbBlock EncodeDeltaOfDelta(List<Int64> buffer)
+		{
+			PbDeltaOfDeltaBlock block = new() { First = buffer[0] };
+			if (buffer.Count >= 2)
+			{
+				block.FirstDelta = unchecked(buffer[1] - buffer[0]);
+				Int64 prevDelta = block.FirstDelta;
+				for (Int32 i = 2; i < buffer.Count; i++)
+				{
+					Int64 delta = unchecked(buffer[i] - buffer[i - 1]);
+					block.DeltaOfDeltas.Add(unchecked(delta - prevDelta));
+					prevDelta = delta;
+				}
+			}
+			return new() { DeltaOfDelta = block };
+		}
+
 		public static PbBlock EncodeDelta(List<Int64> buffer, Int64 min, Int64 max)
 		{
 			Int64 reference = min + (max - min) / 2;
@@ -316,6 +351,41 @@ public static class BlockedInteger
 				block.Deltas.Add(value - reference);
 			}
 			return new() { Delta = block };
+		}
+
+		public static PbBlock EncodeBitPacked(List<Int64> buffer, Int64 min, Int64 max)
+		{
+			UInt64 range = unchecked((UInt64)(max - min));
+			Int32 bitWidth = range == 0 ? 1 : (BitOperations.Log2(range) + 1);
+			byte[] packed = PackBits(buffer, min, bitWidth);
+			return new() { BitPacked = new PbBitPackedBlock
+			{
+				MinValue = min,
+				BitWidth = (UInt32)bitWidth,
+				Count = (UInt32)buffer.Count,
+				PackedData = Google.Protobuf.UnsafeByteOperations.UnsafeWrap(packed)
+			}};
+		}
+
+		private static byte[] PackBits(List<Int64> buffer, Int64 min, Int32 bitWidth)
+		{
+			Int32 totalBytes = (buffer.Count * bitWidth + 7) / 8;
+			byte[] result = new byte[totalBytes];
+			Int32 bitIndex = 0;
+
+			foreach (Int64 value in buffer)
+			{
+				UInt64 offset = unchecked((UInt64)(value - min));
+				for (Int32 b = 0; b < bitWidth; b++)
+				{
+					if ((offset & (1UL << b)) != 0)
+					{
+						result[bitIndex >> 3] |= (byte)(1 << (bitIndex & 7));
+					}
+					bitIndex++;
+				}
+			}
+			return result;
 		}
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -377,8 +447,15 @@ public static class BlockedInteger
 					if (block.Descending == null) return 0;
 					return block.Descending.Diffs.Count + 1;
 
+				case PbBlock.BlockOneofOneofCase.DeltaOfDelta:
+					if (block.DeltaOfDelta == null) return 0;
+					return block.DeltaOfDelta.DeltaOfDeltas.Count + 2;
+
 				case PbBlock.BlockOneofOneofCase.Delta:
 					return block.Delta?.Deltas.Count ?? 0;
+
+				case PbBlock.BlockOneofOneofCase.BitPacked:
+					return (Int32)(block.BitPacked?.Count ?? 0);
 
 				default:
 					return 0;
@@ -414,8 +491,16 @@ public static class BlockedInteger
 					DecodeDescendingPage(block.Descending, startOffset, endOffset, output);
 					break;
 
+				case PbBlock.BlockOneofOneofCase.DeltaOfDelta:
+					DecodeDeltaOfDeltaPage(block.DeltaOfDelta, startOffset, endOffset, output);
+					break;
+
 				case PbBlock.BlockOneofOneofCase.Delta:
 					DecodeDeltaPage(block.Delta, startOffset, endOffset, output);
+					break;
+
+				case PbBlock.BlockOneofOneofCase.BitPacked:
+					DecodeBitPackedPage(block.BitPacked, startOffset, endOffset, output);
 					break;
 			}
 		}
@@ -484,13 +569,16 @@ public static class BlockedInteger
 			}
 
 			Int64 current = block.First;
-			for (Int32 i = 0; i < block.Diffs.Count && i + 1 < endOffset; ++i)
+			Int32 skipCount = Math.Max(0, startOffset - 1);
+			for (Int32 i = 0; i < skipCount && i < block.Diffs.Count; ++i)
 			{
 				current = unchecked(current + (Int64)block.Diffs[i]);
-				if (i + 1 >= startOffset)
-				{
-					output.Add(current);
-				}
+			}
+
+			for (Int32 i = skipCount; i < block.Diffs.Count && i + 1 < endOffset; ++i)
+			{
+				current = unchecked(current + (Int64)block.Diffs[i]);
+				output.Add(current);
 			}
 		}
 
@@ -538,13 +626,52 @@ public static class BlockedInteger
 			}
 
 			Int64 current = block.First;
-			for (Int32 i = 0; i < block.Diffs.Count && i + 1 < endOffset; ++i)
+			Int32 skipCount = Math.Max(0, startOffset - 1);
+			for (Int32 i = 0; i < skipCount && i < block.Diffs.Count; ++i)
 			{
 				current = unchecked(current - (Int64)block.Diffs[i]);
-				if (i + 1 >= startOffset)
-				{
-					output.Add(current);
-				}
+			}
+
+			for (Int32 i = skipCount; i < block.Diffs.Count && i + 1 < endOffset; ++i)
+			{
+				current = unchecked(current - (Int64)block.Diffs[i]);
+				output.Add(current);
+			}
+		}
+
+		private static void DecodeDeltaOfDeltaPage(PbDeltaOfDeltaBlock block,
+			Int32 startOffset, Int32 endOffset, List<Int64> output)
+		{
+			Int32 totalCount = block.DeltaOfDeltas.Count + 2;
+			if (startOffset >= totalCount) return;
+
+			if (startOffset == 0 && endOffset > 0)
+			{
+				output.Add(block.First);
+			}
+
+			if (startOffset <= 1 && endOffset > 1)
+			{
+				output.Add(unchecked(block.First + block.FirstDelta));
+			}
+
+			Int64 current = unchecked(block.First + block.FirstDelta);
+			Int64 prevDelta = block.FirstDelta;
+
+			Int32 skipCount = Math.Max(0, startOffset - 2);
+			for (Int32 i = 0; i < skipCount && i < block.DeltaOfDeltas.Count; ++i)
+			{
+				Int64 dod = block.DeltaOfDeltas[i];
+				prevDelta = unchecked(prevDelta + dod);
+				current = unchecked(current + prevDelta);
+			}
+
+			for (Int32 i = skipCount; i < block.DeltaOfDeltas.Count && i + 2 < endOffset; ++i)
+			{
+				Int64 dod = block.DeltaOfDeltas[i];
+				prevDelta = unchecked(prevDelta + dod);
+				current = unchecked(current + prevDelta);
+				output.Add(current);
 			}
 		}
 
@@ -554,6 +681,41 @@ public static class BlockedInteger
 			for (Int32 i = startOffset; i < endOffset && i < block.Deltas.Count; ++i)
 			{
 				output.Add(unchecked(block.Reference + block.Deltas[i]));
+			}
+		}
+
+		private static void DecodeBitPackedPage(PbBitPackedBlock block,
+			Int32 startOffset, Int32 endOffset, List<Int64> output)
+		{
+			ReadOnlySpan<byte> data = block.PackedData.Span;
+			Int32 bitWidth = (Int32)block.BitWidth;
+			Int32 count = (Int32)block.Count;
+			Int64 min = block.MinValue;
+
+			Int32 byteIndex = startOffset * bitWidth >> 3;
+			Int32 bitInByte = (startOffset * bitWidth) & 7;
+			byte currentByte = data[byteIndex];
+
+			for (Int32 i = startOffset; i < endOffset && i < count; i++)
+			{
+				UInt64 value = 0;
+				for (Int32 b = 0; b < bitWidth; b++)
+				{
+					if ((currentByte & (1 << bitInByte)) != 0)
+					{
+						value |= 1UL << b;
+					}
+					bitInByte++;
+					if (bitInByte == 8)
+					{
+						bitInByte = 0;
+						byteIndex++;
+						if (byteIndex < data.Length)
+							currentByte = data[byteIndex];
+					}
+				}
+
+				output.Add(unchecked(min + (Int64)value));
 			}
 		}
 
@@ -633,6 +795,52 @@ public static class BlockedInteger
 				output.Add(block.Reference + delta);
 			}
 		}
+
+		public static void DecodeDeltaOfDelta(PbDeltaOfDeltaBlock block, List<Int64> output)
+		{
+			output.Add(block.First);
+			Debug.Assert(block.DeltaOfDeltas.Count >= 1,
+				"DeltaOfDeltaBlock.DeltaOfDeltas must not be empty; validator and encoder enforce this.");
+
+			Int64 current = unchecked(block.First + block.FirstDelta);
+			output.Add(current);
+			Int64 prevDelta = block.FirstDelta;
+			foreach (Int64 dod in block.DeltaOfDeltas)
+			{
+				Int64 delta = unchecked(prevDelta + dod);
+				current = unchecked(current + delta);
+				output.Add(current);
+				prevDelta = delta;
+			}
+		}
+
+		public static void DecodeBitPacked(PbBitPackedBlock block, List<Int64> output)
+		{
+			UnpackBits(block, output);
+		}
+
+		private static void UnpackBits(PbBitPackedBlock block, List<Int64> output)
+		{
+			ReadOnlySpan<byte> data = block.PackedData.Span;
+			Int32 bitWidth = (Int32)block.BitWidth;
+			Int32 count = (Int32)block.Count;
+			Int64 min = block.MinValue;
+			Int32 bitIndex = 0;
+
+			for (Int32 i = 0; i < count; i++)
+			{
+				UInt64 value = 0;
+				for (Int32 b = 0; b < bitWidth; b++)
+				{
+					if ((data[bitIndex >> 3] & (1 << (bitIndex & 7))) != 0)
+					{
+						value |= 1UL << b;
+					}
+					bitIndex++;
+				}
+				output.Add(unchecked(min + (Int64)value));
+			}
+		}
 	}
 
 	private static class Validators
@@ -659,8 +867,14 @@ public static class BlockedInteger
 				case PbBlock.BlockOneofOneofCase.Descending:
 					ValidateDescendingBlock(block.Descending, blockIndex, errors);
 					break;
+				case PbBlock.BlockOneofOneofCase.DeltaOfDelta:
+					ValidateDeltaOfDeltaBlock(block.DeltaOfDelta, blockIndex, errors);
+					break;
 				case PbBlock.BlockOneofOneofCase.Delta:
 					ValidateDeltaBlock(block.Delta, blockIndex, errors);
+					break;
+				case PbBlock.BlockOneofOneofCase.BitPacked:
+					ValidateBitPackedBlock(block.BitPacked, blockIndex, errors);
 					break;
 				case PbBlock.BlockOneofOneofCase.None:
 					errors.Add($"Block[{blockIndex}]: 블록 타입이 설정되지 않음");
@@ -756,21 +970,10 @@ public static class BlockedInteger
 			}
 
 			Int32 totalCount = block.Diffs.Count + 1;
-			if (totalCount < 1)
-			{
-				errors.Add($"Block[{blockIndex}] (Ascending): 최소 1개 값 필요 (현재: {totalCount})");
-			}
-
 			if (totalCount > MaxBlockValues)
 			{
 				errors.Add($"Block[{blockIndex}] (Ascending): 최대 {MaxBlockValues}개 값 허용" +
 					$" (현재: {totalCount})");
-			}
-
-			if (block.Diffs.Count > MaxBlockValues)
-			{
-				errors.Add($"Block[{blockIndex}] (Ascending): Diffs는 {MaxBlockValues}개 이하여야 함" +
-					$" (현재: {block.Diffs.Count})");
 			}
 		}
 
@@ -815,21 +1018,48 @@ public static class BlockedInteger
 			}
 
 			Int32 totalCount = block.Diffs.Count + 1;
-			if (totalCount < 1)
-			{
-				errors.Add($"Block[{blockIndex}] (Descending): 최소 1개 값 필요 (현재: {totalCount})");
-			}
-
 			if (totalCount > MaxBlockValues)
 			{
 				errors.Add($"Block[{blockIndex}] (Descending): 최대 {MaxBlockValues}개 값 허용" +
 					$" (현재: {totalCount})");
 			}
+		}
 
-			if (block.Diffs.Count > MaxBlockValues)
+		private static void ValidateDeltaOfDeltaBlock(PbDeltaOfDeltaBlock block,
+			Int32 blockIndex, List<string> errors)
+		{
+			if (block is null)
 			{
-				errors.Add($"Block[{blockIndex}] (Descending): Diffs는 {MaxBlockValues}개 이하여야 함" +
-					$" (현재: {block.Diffs.Count})");
+				errors.Add($"Block[{blockIndex}] (DeltaOfDelta): null");
+				return;
+			}
+
+			if (block.DeltaOfDeltas.Count < 1)
+			{
+				errors.Add($"Block[{blockIndex}] (DeltaOfDelta): DeltaOfDeltas는 1개 이상이어야 함" +
+					$" (현재: {block.DeltaOfDeltas.Count})");
+				return;
+			}
+
+			Int32 totalCount = block.DeltaOfDeltas.Count + 2;
+			if (totalCount > MaxBlockValues)
+			{
+				errors.Add($"Block[{blockIndex}] (DeltaOfDelta): 총 값 개수는 {MaxBlockValues} 이하여야 함" +
+					$" (현재: {totalCount})");
+			}
+
+			// DeltaOfDeltaBlockMax(8191)는 proto 스펙 상한이며, encoder는 DeltaOfDeltaSelectThreshold(31)만 생성.
+			// 31~8191 구간은 외부 도구가 생성한 proto를 수용하기 위해 validator에서 허용됨.
+			foreach (Int64 dod in block.DeltaOfDeltas)
+			{
+				Int64 absDod = dod >= 0 ? dod : -dod;
+				if (absDod > DeltaOfDeltaBlockMax)
+				{
+					errors.Add($"Block[{blockIndex}] (DeltaOfDelta): max|delta-of-delta|는" +
+						$" {DeltaOfDeltaBlockMax} 이하여야 함" +
+						$" (현재: {absDod})");
+					break;
+				}
 			}
 		}
 
@@ -870,6 +1100,46 @@ public static class BlockedInteger
 					$" (현재: {max - min})");
 			}
 		}
+
+		private static void ValidateBitPackedBlock(PbBitPackedBlock block,
+			Int32 blockIndex, List<string> errors)
+		{
+			if (block is null)
+			{
+				errors.Add($"Block[{blockIndex}] (BitPacked): null");
+				return;
+			}
+
+			if (block.Count < 1)
+			{
+				errors.Add($"Block[{blockIndex}] (BitPacked): Count는 1 이상이어야 함" +
+					$" (현재: {block.Count})");
+				return;
+			}
+
+			if (block.Count > MaxBlockValues)
+			{
+				errors.Add($"Block[{blockIndex}] (BitPacked): Count는 {MaxBlockValues} 이하여야 함" +
+					$" (현재: {block.Count})");
+			}
+
+			// 인코더는 Log2(BitPackedBlockMax=1_000_000) + 1 = 20 이하의 BitWidth만 생성하지만,
+			// 프로토버프 확장성과 하위 호환성을 위해 상한을 32로 유지합니다.
+			if (block.BitWidth < 1 || block.BitWidth > 32)
+			{
+				errors.Add($"Block[{blockIndex}] (BitPacked): BitWidth는 1~32 사이여야 함" +
+					$" (현재: {block.BitWidth})");
+				return;
+			}
+
+			Int32 expectedBytes = ((Int32)block.Count * (Int32)block.BitWidth + 7) / 8;
+			Int32 actualBytes = block.PackedData.Length;
+			if (actualBytes != expectedBytes)
+			{
+				errors.Add($"Block[{blockIndex}] (BitPacked): PackedData 길이는 {expectedBytes}여야 함" +
+					$" (현재: {actualBytes})");
+			}
+		}
 	}
 
 	/// <summary>
@@ -886,7 +1156,10 @@ public static class BlockedInteger
 		/// <summary>압축 크기 (바이트).</summary>
 		public Int32 CompressedSize { get; set; }
 
-		/// <summary>압축률 (0.0~1.0, 1.0은 100% 압축 의미).</summary>
+		/// <summary>
+		/// 압축률 (이론상 0.0 이상, 1.0은 무압축, 0.0에 가까울수록 높은 압축률).
+		/// 소규모 입력에서 프로토버프 오버헤드로 인해 1.0을 초과할 수 있습니다.
+		/// </summary>
 		public Double CompressionRatio { get; private set; }
 
 		/// <summary>블록 개수.</summary>
@@ -926,11 +1199,7 @@ public static class BlockedInteger
 		{
 			String blockType = block.BlockOneofCase.ToString();
 
-			if (!statistics.BlockTypeDistribution.ContainsKey(blockType))
-			{
-				statistics.BlockTypeDistribution[blockType] = 0;
-			}
-
+			statistics.BlockTypeDistribution.TryAdd(blockType, 0);
 			statistics.BlockTypeDistribution[blockType]++;
 			statistics.TotalValues += Decoders.GetBlockValueCount(block);
 		}
@@ -938,11 +1207,13 @@ public static class BlockedInteger
 
 	private sealed class BlockAccumulator
 	{
-		private readonly List<Int64> _buffer = [];
+		private readonly List<Int64> _buffer = new(MaxBlockValues);
 		private Int64 _min;
 		private Int64 _max;
 		private Int64 _prev;
 		private Int64 _prevDiff;
+		private Int64 _prevDelta;
+		private UInt64 _maxAbsDod;
 		private bool _isAscending;
 		private bool _isDescending;
 		private bool _isConstant;
@@ -964,9 +1235,9 @@ public static class BlockedInteger
 			_isStrictlyAscending = true;
 			_isStrictlyDescending = true;
 			_prevDiff = 0;
-			// _prev는 의도적으로 초기화하지 않음.
-			// TryAdd에서 _prev를 읽는 모든 코드는 _buffer.Count > 0 가드 내부에 있고,
-			// 첫 TryAdd 호출은 이 가드를 건너뛴 뒤 가드 바깥의 _prev = value로 쓴다.
+			_prevDelta = 0;
+			_maxAbsDod = 0;
+			_prev = 0; // 방어적 초기화. _prev 읽기는 _buffer.Count > 0 조건 하에서만 발생하지만 명시적 초기화가 코드 보수성 향상
 		}
 
 		public bool TryAdd(Int64 value)
@@ -975,18 +1246,34 @@ public static class BlockedInteger
 
 			Int64 newMin = Math.Min(_min, value);
 			Int64 newMax = Math.Max(_max, value);
+			UInt64 newRange = unchecked((UInt64)(newMax - newMin));
+
+			// prospective DoD 계산
+			Int64 prospectiveDelta = _buffer.Count > 0 ? unchecked(value - _prev) : 0;
+			UInt64 prospectiveMaxAbsDod = _maxAbsDod;
+			if (_buffer.Count >= 2)
+			{
+				Int64 dod = unchecked(prospectiveDelta - _prevDelta);
+				UInt64 absDod = dod >= 0 ? (UInt64)dod : (UInt64)(-dod);
+				if (absDod > prospectiveMaxAbsDod) prospectiveMaxAbsDod = absDod;
+			}
 
 			// Ascending/DescendingBlock은 diff만 저장하므로 range 제약이 불필요.
 			// 어느 한 방향이라도 정렬이 유지되는 동안 range 검사를 생략하고,
-			// 양 방향 모두 깨질 때만 range 검사(delta 블록 경계).
+			// 양 방향 모두 깨질 때만 range 검사(DeltaBlock/DoD/BitPacked 블록 경계).
 			if (_buffer.Count > 0)
 			{
 				bool nextAscending = _isAscending && value >= _prev;
 				bool nextDescending = _isDescending && value <= _prev;
-				if (!nextAscending && !nextDescending &&
-					unchecked((UInt64)(newMax - newMin)) > (UInt64)DeltaBlockMax)
+				if (!nextAscending && !nextDescending)
 				{
-					return false;
+					bool deltaOk = newRange <= (UInt64)DeltaBlockMax;
+					bool dodOk = prospectiveMaxAbsDod <= (UInt64)DeltaOfDeltaSelectThreshold;
+					bool bitPackOk = newRange <= (UInt64)BitPackedBlockMax;
+					if (!deltaOk && !dodOk && !bitPackOk)
+					{
+						return false;
+					}
 				}
 
 				if (value < _prev) _isAscending = false;
@@ -1007,6 +1294,10 @@ public static class BlockedInteger
 						_isArithmetic = false;
 					}
 				}
+
+				// prospective 값 커밋
+				_maxAbsDod = prospectiveMaxAbsDod;
+				_prevDelta = prospectiveDelta;
 			}
 
 			_prev = value;
@@ -1057,9 +1348,20 @@ public static class BlockedInteger
 			{
 				proto.Blocks.Add(Encoders.EncodeDescending(_buffer));
 			}
-			else
+			else if (_maxAbsDod <= (UInt64)DeltaOfDeltaSelectThreshold
+				&& _buffer.Count >= DeltaOfDeltaBlockMinCount)
+			{
+				// 비단조이고 delta-of-delta가 매우 작음 → DeltaOfDeltaBlock (DeltaBlock보다 더 효율적)
+				proto.Blocks.Add(Encoders.EncodeDeltaOfDelta(_buffer));
+			}
+			else if (unchecked((UInt64)(_max - _min)) <= (UInt64)DeltaBlockMax)
 			{
 				proto.Blocks.Add(Encoders.EncodeDelta(_buffer, _min, _max));
+			}
+			else
+			{
+				// range > 16382 → BitPackedBlock
+				proto.Blocks.Add(Encoders.EncodeBitPacked(_buffer, _min, _max));
 			}
 
 			Reset();

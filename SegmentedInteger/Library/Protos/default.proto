@@ -92,6 +92,18 @@ message BlockedInteger
 			repeated uint64 diffs = 2;	// 내림차순: prev - next (양수)
 		}
 
+		message DeltaOfDeltaBlock
+		{
+			enum DeltaLimit
+			{
+				DeltaLimit_None = 0;
+				DeltaLimit_Max = 8191;
+			}
+			sint64 first = 1;
+			sint64 first_delta = 2;
+			repeated sint64 delta_of_deltas = 3;
+		}
+
 		message DeltaBlock
 		{
 			enum RangeLimit
@@ -103,6 +115,14 @@ message BlockedInteger
 			repeated sint64 deltas = 2;
 		}
 
+		message BitPackedBlock
+		{
+			sint64 min_value = 1;
+			uint32 bit_width = 2;
+			uint32 count = 3;
+			bytes packed_data = 4;
+		}
+
 		oneof block_oneof
 		{
 			ConstantBlock constant = 1;
@@ -111,7 +131,9 @@ message BlockedInteger
 			AscendingBlock ascending = 4;
 			DescendingBitmapBlock descending_bitmap = 5;
 			DescendingBlock descending = 6;
-			DeltaBlock delta = 7;
+			DeltaOfDeltaBlock delta_of_delta = 7;
+			DeltaBlock delta = 8;
+			BitPackedBlock bit_packed = 9;
 		}
 	}
 
