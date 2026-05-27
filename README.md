@@ -1,58 +1,59 @@
 # SegmentedInteger
 
-`Int64` 값을 패턴에 따라 Protobuf 가변 인코딩(varint)으로 Serialize하여 용량을 줄이는 C# 라이브러리.  
+**목적**: Int64 시퀀스를 패턴 감지 기반으로 압축하여 저장 공간 절감 및 네트워크 전송 효율화
+
+**특징**: 9가지 블록 타입 자동 선택 + System.Runtime.Intrinsics SIMD 최적화
 
 ---
 
-## 클래스 개요
+## 라이브러리 구성
 
-| 클래스 | 입력 조건 | DataType | 복잡도 |
+| 클래스 | 용도 | 입력 | 특징 |
 |---|---|---|---|
-| `BlockedInteger` | 임의의 `Int64` 집합 (순서 보장, 중복 허용) | `IEnumerable<Int64>` | 높음 |
-| `SortedSetInteger` | 중복 없이 정렬된 0을 포함한 양수 `Int64` 집합 | `SortedSet<Int64>` | 낮음 |
+| **BlockedInteger** | 임의의 시계열 데이터 | `IEnumerable<Int64>` | 9가지 블록 타입, 순서·중복 보존, SIMD 최적화 |
+| **SortedSetInteger** | 정렬된 집합 (0 포함 양수) | `SortedSet<Int64>` | 2가지 청크 타입, 중복 없음 |
 
-> `SortedSetInteger` 이후에 `BlockedInteger`를 개발하여 더 범용적으로 사용할 수 있게 개선하였음.
+> **개발 순서**: `SortedSetInteger` → `BlockedInteger` (더 범용적인 확장 버전)
 
 ---
 
-## BlockedInteger
+## BlockedInteger: 패턴 감지 기반 압축
 
-임의의 `Int64` 시퀀스를 패턴에 따라 다양한 방식으로 Serialize 합니다. (순서를 보장하고 중복을 허용합니다.)
+임의의 `Int64` 시퀀스를 Protobuf 직렬화로 압축합니다. (순서 보장, 중복 허용)
 
-### 블록 타입 (우선순위 순)
+### 9가지 블록 타입 (우선순위 순)
 
-| 우선순위 | 타입 | 선택 조건 | 저장 방식 |
-|---|---|---|---|
-| 1 | **ConstantBlock** | 모든 값 동일, count ≥ 3 | (value, count) |
-| 2 | **ArithmeticBlock** | 등차수열, count ≥ 3 | (first, step, count) |
-| 3 | **AscendingBitmapBlock** | strictly ascending, range ≤ 63, count ≥ 10 | first + uint64 비트맵 |
-| 4 | **AscendingBlock** | 단조증가(비내림차순) | first + uint64 차분 리스트 |
-| 5 | **DescendingBitmapBlock** | strictly descending, range ≤ 63, count ≥ 10 | first + uint64 비트맵 |
-| 6 | **DescendingBlock** | 단조감소(비오름차순) | first + uint64 차분 리스트 |
-| 7 | **DeltaBlock** | range ≤ 16,382 (fallback) | midpoint + sint64 델타 리스트 |
+| 우선순위 | 블록 타입 | 선택 조건 | Wire Format | 압축 효율 |
+|---|---|---|---|---|
+| 1 | **ConstantBlock** | 모든 값 동일, count ≥ 3 | (value, count) | 극대 |
+| 2 | **ArithmeticBlock** | 등차수열, count ≥ 3 | (first, step, count) | 극대 |
+| 3 | **AscendingBitmapBlock** | strictly ascending, range ≤ 63, count ≥ 10 | first + uint64 bits | 높음 |
+| 4 | **AscendingBlock** | 단조증가 (비내림차순) | first + uint64 diffs[] | 중상 |
+| 5 | **DescendingBitmapBlock** | strictly descending, range ≤ 63, count ≥ 10 | first + uint64 bits | 높음 |
+| 6 | **DescendingBlock** | 단조감소 (비오름차순) | first + uint64 diffs[] | 중상 |
+| 7 | **DeltaOfDeltaBlock** | 거의 등차 (max\|dod\| ≤ 31) | first + first_delta + sint64 dods[] | 중상 |
+| 8 | **DeltaBlock** | 범용 (range ≤ 16,382) | reference + sint64 deltas[] | 중하 |
+| 9 | **BitPackedBlock** | 범용 (16,382 < range ≤ 1M) | min_value + bit_width + packed_data | 낮음 |
 
-하나의 시퀀스는 여러 블록으로 분할될 수 있습니다. 각 블록은 독립적으로 위 우선순위를 적용합니다.
+### 설계 원칙
 
-> **블록당 값 수 상한 (8,192개)**  
-> 단일 블록이 수용할 수 있는 최대 값은 8,192개입니다. 시퀀스가 이를 초과하면 자동으로 새 블록을 시작합니다.
+**Greedy 스트리밍 선택**: 
+- 입력이 동일하면 항상 동일한 출력 (Deterministic)
+- 값을 1개씩 수집하며 실시간 패턴 감지
+- 블록 조건 만족 시 즉시 확정 (백트래킹 없음)
+- 시간 효율성 우선, 최적 압축률 약간 포기 가능
 
-> **ConstantBlock·ArithmeticBlock 최소 count (3)**  
-> 패턴이 일치해도 count < 3이면 해당 블록을 선택하지 않고 다음 우선순위로 넘어갑니다.  
-> 예: `[5, 5]`는 ConstantBlock 조건(`count ≥ 3`)을 만족하지 않아 AscendingBlock으로 처리됩니다.
+**주요 제약조건**:
+- **블록당 값 수**: 최대 8,192개 (proto spec 준수)
+- **ConstantBlock·ArithmeticBlock**: count ≥ 3 필수
+- **BitmapBlock**: range ≤ 63, count ≥ 10 필수, strictly ascending/descending 필수
+- **DeltaOfDeltaBlock**: max|dod| ≤ 31만 인코더 선택 (proto limit ≤ 8,191)
+- **DeltaBlock**: range ≤ 16,382 (2-byte zigzag 저장)
+- **BitPackedBlock**: fallback 용도 (범위 제약 없음, ≤ 1M까지 지원)
 
-> **BitmapBlock과 중복값**  
-> 비트맵은 각 비트 위치가 값의 존재 여부를 나타내므로, 같은 값을 두 번 표현할 수 없습니다.  
-> range ≤ 63, count ≥ 10을 만족하더라도 중복값이 있으면 strictly 조건(`_isStrictlyAscending` / `_isStrictlyDescending`)이 false가 되어  
-> `AscendingBitmapBlock` → `AscendingBlock`, `DescendingBitmapBlock` → `DescendingBlock`으로 각각 fallback됩니다.
-
-> **BitmapBlock 임계값 근거 (count ≥ 10)**  
-> - AscendingBlock: `tag(1B) + len(1B) + (N−1) × 1B = N+1 bytes`  
-> - AscendingBitmapBlock: `tag(1B) + uint64 varint(최대 9B) = 최대 10B`  
-> - N ≥ 10일 때 비트맵이 항상 이기거나 동률
-
-> **DeltaBlock 강제 분리 조건**  
-> 오름차순·내림차순 단조성이 동시에 깨지고 범위(`max − min`)가 16,382를 초과하면  
-> 현재 블록을 종료하고 새 블록을 시작합니다.
+**블록 분리**:
+- 단조성(ascending/descending)이 동시에 깨지고 range > 16,382 → 새 블록 시작
+- 블록 값 수가 8,192 초과 → 자동 분리
 
 ### API
 
@@ -61,12 +62,17 @@
 BlockedInteger.Encode(ReadOnlySpan<Int64> values, out Pb.BlockedInteger proto);
 BlockedInteger.Encode(IEnumerable<Int64> values, out Pb.BlockedInteger proto);
 
-// 디코딩
+// 디코딩 (전체)
 BlockedInteger.Decode(Pb.BlockedInteger proto, out IReadOnlyList<Int64> integers);
+
+// 디코딩 (페이지 기반 스트리밍)
+Int32 pageCount = BlockedInteger.GetPageCount(proto, pageSize: 1000);
+BlockedInteger.DecodePage(proto, pageIndex, pageSize, out var page);
 ```
 
 ### 사용 예
 
+**기본 사용**:
 ```csharp
 Int64[] values = [5, 5, 5, 5, 1, 2, 3, 4, 5, 100, 50, 30, 10];
 
@@ -75,6 +81,15 @@ BlockedInteger.Encode(values, out var proto);
 
 BlockedInteger.Decode(proto, out var decoded);
 // → [5, 5, 5, 5, 1, 2, 3, 4, 5, 100, 50, 30, 10]
+```
+
+**페이지 기반 스트리밍**:
+```csharp
+Int32 pageCount = BlockedInteger.GetPageCount(proto, pageSize: 1000);
+for (Int32 i = 0; i < pageCount; ++i) {
+    BlockedInteger.DecodePage(proto, i, 1000, out var page);
+    // → 페이지 단위로 처리
+}
 ```
 ---
 
@@ -120,14 +135,40 @@ SortedSetInteger.Decode(proto, out var decoded);
 
 ---
 
-## 직렬화 형식
+## 성능 및 최적화
 
-두 클래스 모두 `Library/Protos/default.proto`에서 생성된 protobuf 메시지를 사용합니다.
+### System.Runtime.Intrinsics SIMD 최적화
 
-인코딩은 **deterministic** — 같은 입력은 항상 같은 바이트 시퀀스를 생성합니다.  
-블록/청크 타입 결정 로직(우선순위, 분기 조건)을 변경하면 바이트 호환성이 깨집니다.
+**UnpackBits 슬라이딩 윈도우** (BitPackedBlock 디코딩):
+- 64비트 단위 읽기로 내부 bitWidth 루프 제거
+- `BinaryPrimitives.ReadUInt64LittleEndian`: 안전한 엔디안 처리
+- `safeCount` 기반 경계 안전성 자동 보장
+- 결과: **나노초 단위 성능** (~1.0 μs for 64 items)
 
-`Library/ProtoOuts/Default.cs`는 빌드 시 protoc가 자동으로 재생성합니다.
+**Vector<T> 벡터화** (DecodeConstant/DecodeArithmetic):
+- `Span<long>.Fill()`: 런타임 벡터 store
+- 플랫폼 자동 선택: AVX2(width=4) / NEON(width=2) / AVX-512(width=8)
+- `unchecked()` 블록: CheckForOverflowUnderflow=true 대응
+
+**CollectionsMarshal 버퍼 관리**:
+- `SetCount` + `AsSpan`으로 List 사전할당
+- bounds check 제거로 메모리 할당 최소화
+- GC 압력 감소
+
+---
+
+## Protobuf 직렬화
+
+### 스키마 및 호환성
+
+**사용 스키마**: `Library/Protos/default.proto` (Google Protobuf 3)
+
+**특징**:
+- **Deterministic**: 동일 입력 → 동일 바이트 시퀀스 (캐싱 및 비교 가능)
+- **호환성**: 새 블록/청크 타입 추가 시에도 기존 데이터 읽기 가능 (oneof 사용)
+- **자동 생성**: 빌드 시 protoc가 `Library/ProtoOuts/Default.cs` 자동 생성
+
+**주의**: 블록 선택 로직(우선순위, 조건)을 변경하면 바이트 호환성이 깨집니다.
 
 ---
 
@@ -135,37 +176,56 @@ SortedSetInteger.Decode(proto, out var decoded);
 
 ```
 SegmentedInteger/
-├── Library/
-│   ├── Protos/default.proto          # protobuf 스키마
-│   ├── ProtoOuts/Default.cs          # protoc 자동 생성 (빌드 시 갱신, git 제외)
-│   ├── SegmentedIntegers/
-│   │   ├── SortedSetInteger.cs
-│   │   └── BlockedInteger.cs
-│   └── Disposables/
-│       └── ElapseWriter.cs
-└── Library.Tests/
-    ├── SortedSetIntegerTests.cs
-    ├── BlockedIntegerTests.cs
-    └── TestDatas/
-        ├── sorted_int_data_01.csv
-        └── sorted_int_data_02.csv
+│
+├── SegmentedInteger/                 # 솔루션 디렉토리
+│   ├── Library/                      # 핵심 라이브러리
+│   │   ├── Library.csproj
+│   │   ├── Protos/default.proto      # Protobuf 스키마
+│   │   ├── ProtoOuts/Default.cs      # protoc 자동 생성 (git 제외)
+│   │   ├── SegmentedIntegers/
+│   │   │   ├── BlockedInteger.cs
+│   │   │   ├── SortedSetInteger.cs
+│   │   └── Disposables/
+│   │       └── ElapseWriter.cs
+│   │
+│   ├── Library.Tests/                # 단위 테스트
+│   │   ├── Library.Tests.csproj
+│   │   ├── BlockedIntegerTests.cs
+│   │   ├── SortedSetIntegerTests.cs
+│   │   └── TestDatas/
+│   │       ├── sorted_int_data_01.csv
+│   │       └── sorted_int_data_02.csv
+│   │
+│   └── SegmentedInteger.sln
+│
+└── README.md                         # 이 파일 (프로젝트 개요)
 ```
 
 ---
 
 ## 빌드 및 테스트
 
+### 단위 테스트
+
 ```powershell
-dotnet test Library.Tests
+cd SegmentedInteger
+dotnet test                           # 전체 테스트
+dotnet test --filter BlockedInteger   # BlockedInteger만
 ```
+
+**테스트 포함 사항**:
+- 라운드트립 테스트 (encode ↔ decode)
+- 경계 케이스 (count=1, max values)
+- Overflow wrap 검증
+- CSV 파일 통합 테스트
 
 ### 의존성
 
 | 패키지 | 버전 | 용도 |
 |---|---|---|
-| Google.Protobuf | 3.35.0 | 직렬화 |
-| TUnit | 1.45.29 | 테스트 프레임워크 |
+| Google.Protobuf | 3.35.0 | Protobuf 직렬화 |
+| TUnit | 1.45.29 | 단위 테스트 프레임워크 |
 | CsvHelper | 33.1.0 | 테스트 데이터 로드 |
-| protoc | 35.0-win64 | proto 코드 생성 (빌드 시) |
+| protoc | 35.0-win64 | Proto 코드 생성 (빌드 시) |
 
-대상 프레임워크: .NET 10.0
+**대상 프레임워크**: .NET 10.0

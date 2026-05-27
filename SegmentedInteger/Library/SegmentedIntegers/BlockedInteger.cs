@@ -745,7 +745,9 @@ public static class BlockedInteger
 							bitInByte = 0;
 							byteIndex++;
 							if (byteIndex < data.Length)
+							{
 								currentByte = data[byteIndex];
+							}
 						}
 					}
 
@@ -774,10 +776,10 @@ public static class BlockedInteger
 
 			// tail: 기존 스칼라
 			Int32 bitIdx = safeEnd * bitWidth;
-			for (Int32 i = safeEnd; i < actualEnd; i++)
+			for (Int32 i = safeEnd; i < actualEnd; ++i)
 			{
 				UInt64 value = 0;
-				for (Int32 b = 0; b < bitWidth; b++)
+				for (Int32 b = 0; b < bitWidth; ++b)
 				{
 					if ((data[bitIdx >> 3] & (1 << (bitIdx & 7))) != 0)
 						value |= 1UL << b;
@@ -820,7 +822,9 @@ public static class BlockedInteger
 				Int32 width = Vector<Int64>.Count;
 				Span<Int64> offsetTmp = stackalloc Int64[width];
 				for (Int32 k = 0; k < width; k++)
+				{
 					offsetTmp[k] = unchecked(k * step);
+				}
 
 				var laneOffsets = new Vector<Int64>(offsetTmp);
 				var strideVec = new Vector<Int64>(unchecked((Int64)width * step));
@@ -942,10 +946,10 @@ public static class BlockedInteger
 			{
 				// Fallback: 스칼라만 사용
 				Int32 bitIdx = 0;
-				for (Int32 i = 0; i < count; i++)
+				for (Int32 i = 0; i < count; ++i)
 				{
 					UInt64 value = 0;
-					for (Int32 b = 0; b < bitWidth; b++)
+					for (Int32 b = 0; b < bitWidth; ++b)
 					{
 						if ((data[bitIdx >> 3] & (1 << (bitIdx & 7))) != 0)
 							value |= 1UL << b;
@@ -960,19 +964,18 @@ public static class BlockedInteger
 			Int32 safeCount = ComputeSafeCount(data.Length, count, bitWidth);
 
 			// 빠른 경로: 64비트 슬라이딩 윈도우
-			for (Int32 i = 0; i < safeCount; i++)
+			for (Int32 i = 0; i < safeCount; ++i)
 			{
 				Int32 bitOffset = i * bitWidth;
 				UInt64 raw = BinaryPrimitives.ReadUInt64LittleEndian(data.Slice(bitOffset >> 3));
 				dest[i] = unchecked(min + (Int64)((raw >> (bitOffset & 7)) & mask));
 			}
 
-			// tail: 스칼라
 			Int32 bitIdx2 = safeCount * bitWidth;
-			for (Int32 i = safeCount; i < count; i++)
+			for (Int32 i = safeCount; i < count; ++i)
 			{
 				UInt64 value = 0;
-				for (Int32 b = 0; b < bitWidth; b++)
+				for (Int32 b = 0; b < bitWidth; ++b)
 				{
 					if ((data[bitIdx2 >> 3] & (1 << (bitIdx2 & 7))) != 0)
 						value |= 1UL << b;
