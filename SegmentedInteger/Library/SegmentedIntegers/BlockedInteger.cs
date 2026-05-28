@@ -1214,6 +1214,8 @@ public static class BlockedInteger
 		{
 			if (_bufferCount < 2) return _maxAbsDod;
 			Int64 dod = unchecked(prospectiveDelta - _prevDelta);
+			// dod == Int64.MinValue일 때 -dod는 unchecked에서 Int64.MinValue로 wrap하지만,
+			// (UInt64) 캐스트가 비트 패턴 0x8000...0을 2^63으로 해석하여 |dod|와 정확히 일치함.
 			UInt64 absDod = unchecked(dod >= 0 ? (UInt64)dod : (UInt64)(-dod));
 			return absDod > _maxAbsDod ? absDod : _maxAbsDod;
 		}
