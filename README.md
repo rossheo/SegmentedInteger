@@ -154,8 +154,8 @@ SortedSetInteger.Decode(proto, out var decoded);
 - `unchecked()` 블록: CheckForOverflowUnderflow=true 대응
 
 **CollectionsMarshal 버퍼 관리**:
-- `SetCount` + `AsSpan`으로 List 사전할당
-- bounds check 제거로 메모리 할당 최소화
+- `SetCount`으로 List 재할당 없이 한 번에 용량 확보
+- `AsSpan`으로 Span 직접 접근 → bounds check 최소화
 - GC 압력 감소
 
 ---
