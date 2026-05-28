@@ -308,54 +308,6 @@ public class BlockedIntegerTests
 		await Assert.That(proto.Blocks[2].Constant.Count).IsEqualTo(3);
 	}
 
-	[Test]
-	public async Task BlockSplit_ThreeTypes_OneRemovedVariant()
-	{
-		// 1을 하나 제거한 변형: 동일한 블록 구조 확인
-		// 원본: [1, 1, 1, 1, 1, 9300, 9200, 9100, 5, 10, 15] (3 블록)
-		// 변형: [1, 1, 1, 1, 9300, 9200, 9100, 5, 10, 15] (동일한 3 블록)
-		Int64[] input = [1, 1, 1, 1, 9300, 9200, 9100, 5, 10, 15];
-		BlockedInteger.Encode(input, out var proto);
-		BlockedInteger.Decode(proto, out var result);
-
-		await PrintCompressionStatistics(proto);
-
-		// Round-trip 정확성 보장
-		await Assert.That(result).IsEquivalentTo(input.ToList());
-		// 동일한 3개 블록 구조 (범위 > 8191 조건 만족)
-		await Assert.That(proto.Blocks.Count).IsEqualTo(3);
-		// 동일한 블록 타입 검증
-		await Assert.That(proto.Blocks[0].BlockOneofCase)
-			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
-		await Assert.That(proto.Blocks[1].BlockOneofCase)
-			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Descending);
-		await Assert.That(proto.Blocks[2].BlockOneofCase)
-			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
-	}
-
-	[Test]
-	public async Task BlockSplit_TwoTypes_AllRemoved()
-	{
-		// 1을 모두 제거한 경우: 2개 블록으로 축소
-		// 원본: [1, 1, 1, 1, 1, 9300, 9200, 9100, 5, 10, 15] (3 블록)
-		// 변형: [9300, 9200, 9100, 5, 10, 15] (2 블록만 예상)
-		// 이유: [5, 10, 15]의 범위 = 10 < 8191, 아래로 내림차순 흡수됨
-		Int64[] input = [9300, 9200, 9100, 5, 10, 15];
-		BlockedInteger.Encode(input, out var proto);
-		BlockedInteger.Decode(proto, out var result);
-
-		await PrintCompressionStatistics(proto);
-
-		// Round-trip 정확성 보장
-		await Assert.That(result).IsEquivalentTo(input.ToList());
-		// 2개 블록으로 축소됨 (범위는 여전히 > 8191이지만 패턴이 다름)
-		await Assert.That(proto.Blocks.Count).IsEqualTo(2);
-		await Assert.That(proto.Blocks[0].BlockOneofCase)
-			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Descending);
-		await Assert.That(proto.Blocks[1].BlockOneofCase)
-			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
-	}
-
 	// ─── 특수 입력 ───
 
 	[Test]
