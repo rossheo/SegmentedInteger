@@ -36,7 +36,7 @@ public static class BlockedInteger
 {
 	private const Int64 DeltaBlockMax = (Int64)PbDeltaBlock.Types.RangeLimit.Max; // 8191
 	private const Int64 DeltaOfDeltaBlockMax = (Int64)PbDeltaOfDeltaBlock.Types.DeltaLimit.Max; // 8191
-	private const Int64 DeltaOfDeltaSelectThreshold = 31; // 선택 조건: max|dod| ≤ 31 (매우 작은 변동), 아니면 DeltaBlock 사용
+	private const Int64 DeltaOfDeltaSelectThreshold = 63; // 선택 조건: max|dod| ≤ 63 (varint 1바이트 범위), 아니면 DeltaBlock 사용
 	private const Int32 MaxBlockValues = 8192; // proto 스펙상 repeated 필드의 합리적 상한; Ascending/Descending diff 저장 capacity
 	private const Int32 RepeatableBlockMinCount = 3;
 	private const Int32 DeltaOfDeltaBlockMinCount = 6; // first + first_delta + 4개 dod 값 이상일 때 효율적

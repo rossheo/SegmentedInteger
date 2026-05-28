@@ -31,7 +31,7 @@
 | 4 | **AscendingBlock** | 단조증가 (비내림차순) | first + uint64 diffs[] | 중상 |
 | 5 | **DescendingBitmapBlock** | strictly descending ∧ range ≤ 63 ∧ count ≥ 8 | first + uint64 bits | 높음 |
 | 6 | **DescendingBlock** | 단조감소 (비오름차순) | first + uint64 diffs[] | 중상 |
-| 7 | **DeltaOfDeltaBlock** | max\|dod\| ≤ 31 ∧ count ≥ 6 | first + first_delta + sint64 dods[] | 중상 |
+| 7 | **DeltaOfDeltaBlock** | max\|dod\| ≤ 63 ∧ count ≥ 6 | first + first_delta + sint64 dods[] | 중상 |
 | 8 | **DeltaBlock** | range ≤ 8,191 (기본값) | reference + sint64 deltas[] | 중하 |
 
 ### 설계 원칙
@@ -46,7 +46,7 @@
 - **블록당 값 수**: 최대 8,192개 (proto spec 준수)
 - **ConstantBlock·ArithmeticBlock**: count ≥ 3 필수
 - **BitmapBlock**: range ≤ 63, count ≥ 8 필수, strictly ascending/descending 필수
-- **DeltaOfDeltaBlock**: max|dod| ≤ 31만 인코더 선택 (proto limit ≤ 8,191)
+- **DeltaOfDeltaBlock**: max|dod| ≤ 63만 인코더 선택 (proto limit ≤ 8,191) → varint 1바이트 범위
 - **DeltaBlock**: range ≤ 8,191 (2-byte zigzag 저장)
 
 **블록 분리**:
