@@ -31,7 +31,7 @@
 | 4 | **AscendingBlock** | 단조증가 (비내림차순) | first + uint64 diffs[] | 중상 |
 | 5 | **DescendingBitmapBlock** | strictly descending ∧ range ≤ 63 ∧ count ≥ 8 | first + uint64 bits | 높음 |
 | 6 | **DescendingBlock** | 단조감소 (비오름차순) | first + uint64 diffs[] | 중상 |
-| 7 | **DeltaOfDeltaBlock** | max\|dod\| ≤ 63 ∧ count ≥ 6 | first + first_delta + sint64 dods[] | 중상 |
+| 7 | **DeltaOfDeltaBlock** | max\|dod\| ≤ 63 ∧ count ≥ 3 | first + first_delta + sint64 dods[] | 중상 |
 | 8 | **DeltaBlock** | range ≤ 8,191 (기본값) | reference + sint64 deltas[] | 중하 |
 
 ### 설계 원칙
@@ -46,12 +46,13 @@
 - **블록당 값 수**: 최대 8,192개 (proto spec 준수)
 - **ConstantBlock·ArithmeticBlock**: count ≥ 3 필수
 - **BitmapBlock**: range ≤ 63, count ≥ 8 필수, strictly ascending/descending 필수
-- **DeltaOfDeltaBlock**: max|dod| ≤ 63만 인코더 선택 (proto limit ≤ 8,191) → varint 1바이트 범위
+- **DeltaOfDeltaBlock**: max|dod| ≤ 63만 인코더 선택 (proto limit ≤ 8,191), count ≥ 3
 - **DeltaBlock**: range ≤ 8,191 (2-byte zigzag 저장)
 
 **블록 분리**:
 - 단조성(ascending/descending)이 동시에 깨지고 range > 8,191 → 새 블록 시작
 - 블록 값 수가 8,192 초과 → 자동 분리
+- Constant/Arithmetic 접두부(≥5개)가 비단조 데이터 앞에 있으면 접두부를 먼저 분리하여 emit
 
 ### API
 

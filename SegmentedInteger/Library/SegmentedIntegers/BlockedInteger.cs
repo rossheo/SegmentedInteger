@@ -24,12 +24,13 @@ using PbDescendingBlock = Pb.BlockedInteger.Types.Block.Types.DescendingBlock;
 /// - AscendingBlock:        단조증가(비내림차순) → first + repeated uint64 diffs (≤8191개)
 /// - DescendingBitmapBlock: strictly descending, range ≤ 63, count ≥ 10 → first + uint64 bits
 /// - DescendingBlock:       단조감소(비오름차순) → first + repeated uint64 diffs (≤8191개)
-/// - DeltaOfDeltaBlock:     nearly-arithmetic (encoder: max|dod| ≤ 31, proto limit: ≤ 8,191) → first + first_delta + sint64 dods
+/// - DeltaOfDeltaBlock:     nearly-arithmetic (encoder: max|dod| ≤ 63, proto limit: ≤ 8,191, count ≥ 3) → first + first_delta + sint64 dods
 /// - DeltaBlock:            range ≤ 8,191 → reference + sint64 deltas (≤2-byte zigzag)
 /// <para>
 /// 인코딩은 deterministic(입력 동일 → 출력 동일)이며 greedy 방식으로 동작합니다.
 /// BlockAccumulator는 스트리밍 방식으로 최적 블록 타입을 선택하되 백트래킹을 하지 않으므로,
 /// 약간의 조정으로 더 나은 압축률을 얻을 수 있는 경우도 있습니다.
+/// Constant/Arithmetic 접두부(≥5개)가 있는 비단조 시퀀스는 해당 접두부를 먼저 분리하여 emit합니다.
 /// </para>
 /// </summary>
 public static class BlockedInteger
@@ -39,7 +40,8 @@ public static class BlockedInteger
 	private const Int64 DeltaOfDeltaSelectThreshold = 63; // 선택 조건: max|dod| ≤ 63 (varint 1바이트 범위), 아니면 DeltaBlock 사용
 	private const Int32 MaxBlockValues = 8192; // proto 스펙상 repeated 필드의 합리적 상한; Ascending/Descending diff 저장 capacity
 	private const Int32 RepeatableBlockMinCount = 3;
-	private const Int32 DeltaOfDeltaBlockMinCount = 6; // first + first_delta + 4개 dod 값 이상일 때 효율적
+	private const Int32 DeltaOfDeltaBlockMinCount = 3; // first + first_delta + 1개 dod 최소 (validator 최소 단위)
+	private const Int32 PrefixSplitMinCount = 5; // prefix 분리가 이득인 최소 길이 (블록 태그 오버헤드 고려)
 	private const Int32 BitmapBlockMinCount = 8;
 	private const Int64 BitmapBlockRange = 63;
 
@@ -694,7 +696,7 @@ public static class BlockedInteger
 			{
 				Int32 width = Vector<Int64>.Count;
 				Span<Int64> offsetTmp = stackalloc Int64[width];
-				for (Int32 k = 0; k < width; k++)
+				for (Int32 k = 0; k < width; ++k)
 				{
 					offsetTmp[k] = unchecked(k * step);
 				}
@@ -1001,8 +1003,9 @@ public static class BlockedInteger
 					$" (현재: {totalCount})");
 			}
 
-			// DeltaOfDeltaBlockMax(8191)는 proto 스펙 상한이며, encoder는 DeltaOfDeltaSelectThreshold(31)만 생성.
-			// 31~8191 구간은 외부 도구가 생성한 proto를 수용하기 위해 validator에서 허용됨.
+			// DeltaOfDeltaBlockMax(8191)는 proto 스펙 상한이며,
+			// encoder는 DeltaOfDeltaSelectThreshold(63)까지 생성.
+			// 64~8191 구간은 외부 도구가 생성한 proto를 수용하기 위해 validator에서 허용됨.
 			foreach (Int64 dod in block.DeltaOfDeltas)
 			{
 				Int64 absDod = dod >= 0 ? dod : -dod;
@@ -1121,94 +1124,74 @@ public static class BlockedInteger
 
 	private sealed class BlockAccumulator
 	{
-		private readonly List<Int64> _buffer = new(MaxBlockValues);
+		[Flags]
+		private enum SequenceFlags : byte
+		{
+			Constant = 1,
+			Arithmetic = 2,
+			Ascending = 4,
+			Descending = 8,
+			StrictlyAscending = 16,
+			StrictlyDescending = 32,
+			All = Constant | Arithmetic | Ascending | Descending | StrictlyAscending | StrictlyDescending
+		}
+
+		private readonly Int64[] _buffer = new Int64[MaxBlockValues];
+		private Int32 _bufferCount;
 		private Int64 _min;
 		private Int64 _max;
 		private Int64 _prev;
 		private Int64 _prevDiff;
 		private Int64 _prevDelta;
 		private UInt64 _maxAbsDod;
-		private bool _isAscending;
-		private bool _isDescending;
-		private bool _isConstant;
-		private bool _isArithmetic;
-		private bool _isStrictlyAscending;
-		private bool _isStrictlyDescending;
+		private SequenceFlags _flags;
+		private Int32 _constantPrefixCount;   // Constant가 false로 전이될 때의 buffer 길이
+		private Int32 _arithmeticPrefixCount; // Arithmetic이 false로 전이될 때의 buffer 길이
 
 		public BlockAccumulator() => Reset();
 
 		private void Reset()
 		{
-			_buffer.Clear();
+			_bufferCount = 0;
 			_min = Int64.MaxValue;
 			_max = Int64.MinValue;
-			_isAscending = true;
-			_isDescending = true;
-			_isConstant = true;
-			_isArithmetic = true;
-			_isStrictlyAscending = true;
-			_isStrictlyDescending = true;
+			_flags = SequenceFlags.All;
 			_prevDiff = 0;
 			_prevDelta = 0;
 			_maxAbsDod = 0;
-			_prev = 0; // 방어적 초기화. _prev 읽기는 _buffer.Count > 0 조건 하에서만 발생하지만 명시적 초기화가 코드 보수성 향상
+			_constantPrefixCount = 0;
+			_arithmeticPrefixCount = 0;
+			_prev = 0;
 		}
 
 		public bool TryAdd(Int64 value)
 		{
-			if (_buffer.Count >= MaxBlockValues) return false;
+			if (_bufferCount >= MaxBlockValues) return false;
 
 			Int64 newMin = Math.Min(_min, value);
 			Int64 newMax = Math.Max(_max, value);
-			UInt64 newRange = unchecked((UInt64)(newMax - newMin));
 
-			// prospective DoD 계산
-			Int64 prospectiveDelta = _buffer.Count > 0 ? unchecked(value - _prev) : 0;
-			UInt64 prospectiveMaxAbsDod = _maxAbsDod;
-			if (_buffer.Count >= 2)
+			if (_bufferCount > 0)
 			{
-				Int64 dod = unchecked(prospectiveDelta - _prevDelta);
-				UInt64 absDod = dod >= 0 ? (UInt64)dod : (UInt64)(-dod);
-				if (absDod > prospectiveMaxAbsDod) prospectiveMaxAbsDod = absDod;
-			}
+				Int64 prospectiveDelta = unchecked(value - _prev);
+				UInt64 prospectiveMaxAbsDod = ComputeProspectiveMaxAbsDod(prospectiveDelta);
+				// unchecked 뺄셈은 극값 근처에서 wrap할 수 있으므로
+				// 단조성 판정은 원래 값을 직접 비교한다.
+				Int32 cmp = value < _prev ? -1 : value > _prev ? 1 : 0;
+				UInt64 newRange = unchecked((UInt64)(newMax - newMin));
 
-			// Ascending/DescendingBlock은 diff만 저장하므로 range 제약이 불필요.
-			// 어느 한 방향이라도 정렬이 유지되는 동안 range 검사를 생략하고,
-			// 양 방향 모두 깨질 때만 range 검사(DeltaBlock/DoD/BitPacked 블록 경계).
-			if (_buffer.Count > 0)
-			{
-				bool nextAscending = _isAscending && value >= _prev;
-				bool nextDescending = _isDescending && value <= _prev;
-				if (!nextAscending && !nextDescending)
+				// 단조성이 유지되는 한 range 제약 없음(Ascending/DescendingBlock은 diff만 저장).
+				// 단조성이 이미 깨졌거나 이번 값으로 깨지면 Delta/DoD 범위 내여야 한다.
+				bool monotonicityHolds =
+					(_flags & (SequenceFlags.Ascending | SequenceFlags.Descending)) != 0
+					&& WillRemainMonotonic(cmp);
+				if (!monotonicityHolds && !IsWithinBlockRange(newRange, prospectiveMaxAbsDod))
 				{
-					bool deltaOk = newRange <= (UInt64)DeltaBlockMax;
-					bool dodOk = prospectiveMaxAbsDod <= (UInt64)DeltaOfDeltaSelectThreshold;
-					if (!deltaOk && !dodOk)
-					{
-						return false;
-					}
+					return false;
 				}
 
-				if (value < _prev) _isAscending = false;
-				if (value > _prev) _isDescending = false;
-				if (value != _prev) _isConstant = false;
-				if (value <= _prev) _isStrictlyAscending = false;
-				if (value >= _prev) _isStrictlyDescending = false;
-
-				if (_isArithmetic)
-				{
-					Int64 diff = unchecked(value - _prev);
-					if (_buffer.Count == 1)
-					{
-						_prevDiff = diff;
-					}
-					else if (diff != _prevDiff)
-					{
-						_isArithmetic = false;
-					}
-				}
-
-				// prospective 값 커밋
+				UpdateMonotonicity(cmp);
+				UpdateArithmetic(prospectiveDelta);
 				_maxAbsDod = prospectiveMaxAbsDod;
 				_prevDelta = prospectiveDelta;
 			}
@@ -1216,8 +1199,59 @@ public static class BlockedInteger
 			_prev = value;
 			_min = newMin;
 			_max = newMax;
-			_buffer.Add(value);
+			_buffer[_bufferCount++] = value;
 			return true;
+		}
+
+		private UInt64 ComputeProspectiveMaxAbsDod(Int64 prospectiveDelta)
+		{
+			if (_bufferCount < 2) return _maxAbsDod;
+			Int64 dod = unchecked(prospectiveDelta - _prevDelta);
+			UInt64 absDod = unchecked(dod >= 0 ? (UInt64)dod : (UInt64)(-dod));
+			return absDod > _maxAbsDod ? absDod : _maxAbsDod;
+		}
+
+		private bool WillRemainMonotonic(int cmp)
+		{
+			bool nextAscending  = (_flags & SequenceFlags.Ascending)  != 0 && cmp >= 0;
+			bool nextDescending = (_flags & SequenceFlags.Descending) != 0 && cmp <= 0;
+			return nextAscending || nextDescending;
+		}
+
+		private static bool IsWithinBlockRange(UInt64 range, UInt64 maxAbsDod) =>
+			range <= (UInt64)DeltaBlockMax || maxAbsDod <= (UInt64)DeltaOfDeltaSelectThreshold;
+
+		private void UpdateMonotonicity(int cmp)
+		{
+			if (cmp < 0)  _flags &= ~(SequenceFlags.Ascending | SequenceFlags.StrictlyAscending);
+			if (cmp > 0)  _flags &= ~(SequenceFlags.Descending | SequenceFlags.StrictlyDescending);
+			if (cmp == 0) _flags &= ~(SequenceFlags.StrictlyAscending | SequenceFlags.StrictlyDescending);
+			if (cmp != 0)
+			{
+				if ((_flags & SequenceFlags.Constant) != 0 && _constantPrefixCount == 0)
+				{
+					_constantPrefixCount = _bufferCount;
+				}
+				_flags &= ~SequenceFlags.Constant;
+			}
+		}
+
+		private void UpdateArithmetic(Int64 diff)
+		{
+			if ((_flags & SequenceFlags.Arithmetic) == 0) return;
+			// _bufferCount는 이 호출 시점에 아직 증가 전이므로 1이면 두 번째 원소를 처리 중이다.
+			if (_bufferCount == 1)
+			{
+				_prevDiff = diff;
+			}
+			else if (diff != _prevDiff)
+			{
+				if (_arithmeticPrefixCount == 0)
+				{
+					_arithmeticPrefixCount = _bufferCount;
+				}
+				_flags &= ~SequenceFlags.Arithmetic;
+			}
 		}
 
 		public void Feed(PbBlockedInteger proto, Int64 value)
@@ -1225,57 +1259,104 @@ public static class BlockedInteger
 			if (!TryAdd(value))
 			{
 				Flush(proto);
-				TryAdd(value);
+				bool added = TryAdd(value);
+				Debug.Assert(added, "TryAdd failed after flush — logic invariant violated.");
 			}
 		}
 
 		public void Flush(PbBlockedInteger proto)
 		{
-			if (_buffer.Count == 0) return;
+			// Prefix split 후 suffix를 재분석해야 할 수 있으므로 루프로 처리.
+			// 매 반복은 prefix를 emit하거나 전체 버퍼를 emit하고 종료.
+			while (_bufferCount > 0)
+			{
+				ReadOnlySpan<Int64> bufferSpan = new(_buffer, 0, _bufferCount);
 
-			ReadOnlySpan<Int64> bufferSpan = CollectionsMarshal.AsSpan(_buffer);
+				// Constant prefix 분리: 데이터가 비단조가 되었을 때만 적용.
+				// 단조(ascending/descending) 상태라면 ascending/bitmap 블록이 더 유리할 수 있음.
+				if (_constantPrefixCount >= PrefixSplitMinCount
+					&& (_flags & (SequenceFlags.Ascending | SequenceFlags.Descending)) == 0)
+				{
+					proto.Blocks.Add(Encoders.EncodeConstant(bufferSpan.Slice(0, _constantPrefixCount)));
+					ReFeed(bufferSpan.Slice(_constantPrefixCount));
+					continue;
+				}
 
-			if (_isConstant && _buffer.Count >= RepeatableBlockMinCount)
+				// Arithmetic prefix 분리: 비단조 데이터에서만 적용.
+				if (_arithmeticPrefixCount >= PrefixSplitMinCount
+					&& (_flags & (SequenceFlags.Constant | SequenceFlags.Ascending | SequenceFlags.Descending)) == 0)
+				{
+					proto.Blocks.Add(Encoders.EncodeArithmetic(bufferSpan.Slice(0, _arithmeticPrefixCount)));
+					ReFeed(bufferSpan.Slice(_arithmeticPrefixCount));
+					continue;
+				}
+
+				SelectAndEmitBlock(proto, bufferSpan);
+				Reset();
+				return;
+			}
+		}
+
+		// suffix는 _buffer를 가리키는 span이므로 Reset() 후 TryAdd가 낮은 인덱스에
+		// 쓰고 높은 인덱스에서 읽는다. prefixCount >= PrefixSplitMinCount(5) > 0이므로
+		// 읽기 인덱스가 항상 쓰기 인덱스보다 앞에 있어 aliasing이 없다.
+		private void ReFeed(ReadOnlySpan<Int64> suffix)
+		{
+			Reset();
+			foreach (Int64 value in suffix)
+			{
+				TryAdd(value);
+			}
+		}
+
+		private void SelectAndEmitBlock(PbBlockedInteger proto, ReadOnlySpan<Int64> bufferSpan)
+		{
+			// _max - _min이 Int64 범위를 초과할 수 있으므로 UInt64로 비교한다.
+			// unchecked 캐스트는 비트 패턴을 그대로 유지해 올바른 UInt64 거리를 만든다.
+			UInt64 valueRange = unchecked((UInt64)(_max - _min));
+
+			if ((_flags & SequenceFlags.Constant) != 0
+				&& _bufferCount >= RepeatableBlockMinCount)
 			{
 				proto.Blocks.Add(Encoders.EncodeConstant(bufferSpan));
 			}
-			else if (_isArithmetic && _buffer.Count >= RepeatableBlockMinCount)
+			else if ((_flags & SequenceFlags.Arithmetic) != 0
+				&& _bufferCount >= RepeatableBlockMinCount)
 			{
 				proto.Blocks.Add(Encoders.EncodeArithmetic(bufferSpan));
 			}
-			else if (_isStrictlyAscending
-				&& _buffer.Count >= BitmapBlockMinCount
-				&& (_max - _min) <= BitmapBlockRange)
+			else if ((_flags & SequenceFlags.StrictlyAscending) != 0
+				&& _bufferCount >= BitmapBlockMinCount
+				&& valueRange <= (UInt64)BitmapBlockRange)
 			{
 				proto.Blocks.Add(Encoders.EncodeAscendingBitmap(bufferSpan));
 			}
-			else if (_isAscending)
+			else if ((_flags & SequenceFlags.Ascending) != 0)
 			{
 				proto.Blocks.Add(Encoders.EncodeAscending(bufferSpan));
 			}
-			else if (_isStrictlyDescending
-				&& _buffer.Count >= BitmapBlockMinCount
-				&& (_max - _min) <= BitmapBlockRange)
+			else if ((_flags & SequenceFlags.StrictlyDescending) != 0
+				&& _bufferCount >= BitmapBlockMinCount
+				&& valueRange <= (UInt64)BitmapBlockRange)
 			{
 				proto.Blocks.Add(Encoders.EncodeDescendingBitmap(bufferSpan));
 			}
-			else if (_isDescending)
+			else if ((_flags & SequenceFlags.Descending) != 0)
 			{
 				proto.Blocks.Add(Encoders.EncodeDescending(bufferSpan));
 			}
 			else if (_maxAbsDod <= (UInt64)DeltaOfDeltaSelectThreshold
-				&& _buffer.Count >= DeltaOfDeltaBlockMinCount)
+				&& _bufferCount >= DeltaOfDeltaBlockMinCount)
 			{
 				// 비단조이고 delta-of-delta가 매우 작음 → DeltaOfDeltaBlock (DeltaBlock보다 더 효율적)
 				proto.Blocks.Add(Encoders.EncodeDeltaOfDelta(bufferSpan));
 			}
 			else
 			{
-				// TryAdd 불변 조건: 비단조 구간에서 range > 8191이면 블록 경계 (Flush 시점에서 range ≤ 8191 또는 DoD 조건 만족 보장)
+				// TryAdd 불변 조건: 비단조 구간에서 range > 8191이면
+				// 블록 경계 (Flush 시점에서 range ≤ 8191 또는 DoD 조건 만족 보장)
 				proto.Blocks.Add(Encoders.EncodeDelta(bufferSpan, _min, _max));
 			}
-
-			Reset();
 		}
 	}
 }

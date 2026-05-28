@@ -308,6 +308,60 @@ public class BlockedIntegerTests
 		await Assert.That(proto.Blocks[2].Constant.Count).IsEqualTo(3);
 	}
 
+	[Test]
+	public async Task PrefixSplit_ConstantPrefix_ThenNonMonotone()
+	{
+		// Constant prefix(≥5) + 후행 비단조 → ConstantBlock + DeltaBlock 분리
+		// [5×8, 100, 200, 50]: constant prefix=8, 후행이 비단조(100→200→50) → 분리 발생
+		// dod = (200-100) → (-150) → -250 : max|dod|=250>63, range=195≤8191 → DeltaBlock
+		Int64[] input = [5, 5, 5, 5, 5, 5, 5, 5, 100, 200, 50];
+		BlockedInteger.Encode(input, out var proto);
+		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+		await Assert.That(proto.Blocks.Count).IsEqualTo(2);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Constant);
+		await Assert.That(proto.Blocks[0].Constant.Value).IsEqualTo(5L);
+		await Assert.That(proto.Blocks[0].Constant.Count).IsEqualTo(8);
+		await Assert.That(proto.Blocks[1].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
+	}
+
+	[Test]
+	public async Task PrefixSplit_ArithmeticPrefix_ThenDelta()
+	{
+		// Arithmetic prefix(≥5) + 후행 비단조 → ArithmeticBlock + DeltaBlock 분리
+		// [0,10,20,30,40,50,100,50,0]: arithmetic prefix=6, 후행이 비단조+큰 진폭 → DeltaBlock
+		Int64[] input = [0, 10, 20, 30, 40, 50, 5100, 200, 5200];
+		BlockedInteger.Encode(input, out var proto);
+		BlockedInteger.Decode(proto, out var result);
+
+		await PrintCompressionStatistics(proto);
+
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+		await Assert.That(proto.Blocks.Count).IsGreaterThanOrEqualTo(2);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Arithmetic);
+	}
+
+	[Test]
+	public async Task PrefixSplit_ConstantPrefix_StillAscending_NoSplit()
+	{
+		// Constant prefix + 후행이 단조증가 → 전체가 AscendingBlock (prefix split 안 함)
+		// [5×5, 10, 20, 30]: 전체가 non-decreasing이므로 AscendingBlock 1개
+		Int64[] input = [5, 5, 5, 5, 5, 10, 20, 30];
+		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
+		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
+	}
+
 	// ─── 특수 입력 ───
 
 	[Test]
@@ -888,11 +942,25 @@ public class BlockedIntegerTests
 	}
 
 	[Test]
-	public async Task DeltaOfDeltaBlock_CountBelowMinCount_UsesDeltaBlock()
+	public async Task DeltaOfDeltaBlock_MinCount3_SmallDod_IsSelected()
 	{
-		// count = 5 < DeltaOfDeltaBlockMinCount(6) → DeltaBlock 선택
-		// max|dod| = 21이지만 count 조건 불만족
-		Int64[] input = [1000, 1010, 999, 1009, 998];
+		// count = 3 (최소 단위), max|dod|=21 ≤ 63 → DeltaOfDeltaBlock 선택
+		// [1000, 1010, 999]: delta1=10, delta2=-11, dod=-21 → max|dod|=21 ≤ 63
+		Int64[] input = [1000, 1010, 999];
+		BlockedInteger.Encode(input, out var proto);
+
+		await PrintCompressionStatistics(proto);
+
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.DeltaOfDelta);
+	}
+
+	[Test]
+	public async Task DeltaOfDeltaBlock_DodExceedsThreshold_Count3_UsesDeltaBlock()
+	{
+		// count = 3 (최소), max|dod| > 63 → DeltaBlock (임계 초과)
+		// [0, 200, 3]: delta1=200, delta2=-197, dod=-397 → max|dod|=397 > 63, range=200 ≤ 8191
+		Int64[] input = [0, 200, 3];
 		BlockedInteger.Encode(input, out var proto);
 
 		await PrintCompressionStatistics(proto);
@@ -938,16 +1006,17 @@ public class BlockedIntegerTests
 	[Test]
 	public async Task DeltaBlock_ReferenceCalculation_Symmetric()
 	{
-		// min=0, max=10 → reference=5
-		// deltas: 0-5=-5, 10-5=5, 3-5=-2
-		Int64[] input = [0, 10, 3];
+		// min=0, max=200 → reference=100 (중간값)
+		// deltas: 0-100=-100, 200-100=100, 3-100=-97
+		// [0, 200, 3]: dod=-397, max|dod|=397>63 → DeltaBlock 강제
+		Int64[] input = [0, 200, 3];
 		BlockedInteger.Encode(input, out var proto);
 
 		await PrintCompressionStatistics(proto);
 
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
-		await Assert.That(proto.Blocks[0].Delta.Reference).IsEqualTo(5L);
+		await Assert.That(proto.Blocks[0].Delta.Reference).IsEqualTo(100L);
 	}
 
 	[Test]
@@ -967,14 +1036,17 @@ public class BlockedIntegerTests
 	[Test]
 	public async Task DeltaBlock_PositiveNegativeMixed_RoundTrip()
 	{
-		// 양수와 음수 혼합 - 라운드트립 확인 (블록 타입은 인코더 최적화에 따라 결정)
-		Int64[] input = [-10, 20, 5, -5, 15, -8, 12, -3, 8, 18,
-		                 -7, 10, 2, -9, 17, 4, -6, 13, -1, 11];
+		// 양수와 음수 큰 진폭 교차: max|dod|=9900>63, range=5900≤8191 → DeltaBlock
+		// deltas: +5000,-4900 반복; dod: -9900,+9900 반복
+		Int64[] input = [100, 5100, 200, 5200, 300, 5300, 400, 5400, 500, 5500,
+		                 600, 5600, 700, 5700, 800, 5800, 900, 5900, 1000, 6000];
 		BlockedInteger.Encode(input, out var proto);
 		BlockedInteger.Decode(proto, out var result);
 
 		await PrintCompressionStatistics(proto);
 
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
 		await Assert.That(result).IsEquivalentTo(input.ToList());
 	}
 
@@ -994,14 +1066,17 @@ public class BlockedIntegerTests
 	[Test]
 	public async Task DeltaBlock_Duplicates_RoundTrip()
 	{
-		// 중복 포함 비정렬
-		Int64[] input = [10, 5, 10, 3, 5];
+		// 중복 포함 비정렬, max|dod|>63 → DeltaBlock
+		// [1000, 100, 1000, 100, 1000]: dod=1800, max|dod|=1800>63, range=900≤8191
+		Int64[] input = [1000, 100, 1000, 100, 1000];
 		BlockedInteger.Encode(input, out var proto);
+		BlockedInteger.Decode(proto, out var result);
 
 		await PrintCompressionStatistics(proto);
 
 		await Assert.That(proto.Blocks[0].BlockOneofCase)
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Delta);
+		await Assert.That(result).IsEquivalentTo(input.ToList());
 	}
 
 	[Test]
@@ -1488,17 +1563,17 @@ public class BlockedIntegerTests
 	}
 
 	[Test]
-	public async Task CompressionStatistics_NonMonotonicData()
+	public async Task CompressionStatistics_Delta()
 	{
-		// 비단조 데이터의 통계 (블록 타입은 인코더 최적화에 따라 결정)
-		Int64[] input = [-10, 20, 5, -5, 15, -8, 12, -3, 8, 18];
+		// DeltaBlock: max|dod|=9900>63, range=5200≤8191 → DeltaBlock 강제
+		Int64[] input = [100, 5100, 200, 5200, 300, 5300, 400, 5400, 500, 5500];
 		BlockedInteger.Encode(input, out var proto);
 
 		var stats = await PrintCompressionStatistics(proto);
 
 		await Assert.That(stats.TotalValues).IsEqualTo(10);
-		await Assert.That(stats.BlockCount).IsGreaterThan(0);
-		await Assert.That(stats.CompressedSize).IsGreaterThan(0);
+		await Assert.That(stats.BlockTypeDistribution).ContainsKey("Delta");
+		await Assert.That(stats.BlockTypeDistribution["Delta"]).IsEqualTo(1);
 	}
 
 	[Test]
