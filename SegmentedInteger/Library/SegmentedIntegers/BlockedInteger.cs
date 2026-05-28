@@ -44,6 +44,7 @@ public static class BlockedInteger
 	private const Int32 PrefixSplitMinCount = 5; // prefix 분리가 이득인 최소 길이 (블록 태그 오버헤드 고려)
 	private const Int32 BitmapBlockMinCount = 8;
 	private const Int64 BitmapBlockRange = 63;
+	private const Int32 UInt64BitWidth = 64;
 
 	/// <summary>
 	/// 임의의 Int64 시퀀스를 블록 구조로 인코딩합니다.
@@ -81,7 +82,10 @@ public static class BlockedInteger
 	/// <summary>
 	/// 블록 구조를 Int64 시퀀스로 디코딩합니다. 순서와 중복을 보존합니다.
 	/// </summary>
-	/// <remarks>신뢰된 입력 전용. 외부 proto는 Count 범위 등을 검증하지 않습니다.</remarks>
+	/// <remarks>
+	/// 신뢰된 입력 전용. 각 블록의 내부 invariant(Deltas/DeltaOfDeltas 비어있지 않음 등)를
+	/// 검증하지 않습니다. 신뢰할 수 없는 외부 입력은 먼저 <c>Validators</c>로 검증하세요.
+	/// </remarks>
 	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
 	public static void Decode(PbBlockedInteger proto, out IReadOnlyList<Int64> integers)
 	{
@@ -165,7 +169,8 @@ public static class BlockedInteger
 	/// <param name="integers">디코딩된 값 목록</param>
 	/// <remarks>
 	/// pageIndex 범위를 벗어난 경우 빈 결과를 반환합니다.
-	/// Trusted input only.
+	/// 신뢰된 입력 전용. 각 블록의 내부 invariant를 검증하지 않습니다.
+	/// 신뢰할 수 없는 외부 입력은 먼저 <c>Validators</c>로 검증하세요.
 	/// </remarks>
 	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
 	/// <exception cref="ArgumentException">pageIndex &lt; 0 또는 pageSize &lt;= 0인 경우</exception>
@@ -526,7 +531,8 @@ public static class BlockedInteger
 			while (bits != 0 && currentPos < endOffset)
 			{
 				Int32 trailingZeros = BitOperations.TrailingZeroCount(bits);
-				bitIndex += trailingZeros + 1;
+				Int32 shift = trailingZeros + 1;
+				bitIndex += shift;
 
 				if (currentPos >= startOffset)
 				{
@@ -534,14 +540,15 @@ public static class BlockedInteger
 				}
 
 				currentPos++;
-				bits >>= trailingZeros + 1;
+				if (shift >= UInt64BitWidth) break;
+				bits >>= shift;
 			}
 		}
 
 		private static void DecodeAscendingPage(PbAscendingBlock block,
 			Int32 startOffset, Int32 endOffset, List<Int64> output)
 		{
-			if (startOffset == 0)
+			if (startOffset == 0 && endOffset > 0)
 			{
 				output.Add(block.First);
 			}
@@ -586,7 +593,8 @@ public static class BlockedInteger
 			while (bits != 0 && currentPos < endOffset)
 			{
 				Int32 trailingZeros = BitOperations.TrailingZeroCount(bits);
-				bitIndex += trailingZeros + 1;
+				Int32 shift = trailingZeros + 1;
+				bitIndex += shift;
 
 				if (currentPos >= startOffset)
 				{
@@ -594,14 +602,15 @@ public static class BlockedInteger
 				}
 
 				currentPos++;
-				bits >>= trailingZeros + 1;
+				if (shift >= UInt64BitWidth) break;
+				bits >>= shift;
 			}
 		}
 
 		private static void DecodeDescendingPage(PbDescendingBlock block,
 			Int32 startOffset, Int32 endOffset, List<Int64> output)
 		{
-			if (startOffset == 0)
+			if (startOffset == 0 && endOffset > 0)
 			{
 				output.Add(block.First);
 			}
