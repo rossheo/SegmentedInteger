@@ -479,6 +479,7 @@ public static class BlockedInteger
 			Int32 actualEnd = Math.Min(endOffset, block.Count);
 			Int32 written = actualEnd - startOffset;
 			if (written <= 0) return;
+
 			Int32 start = output.Count;
 			CollectionsMarshal.SetCount(output, start + written);
 			CollectionsMarshal.AsSpan(output).Slice(start, written).Fill(block.Value);
@@ -701,9 +702,9 @@ public static class BlockedInteger
 					offsetTmp[k] = unchecked(k * step);
 				}
 
-				var laneOffsets = new Vector<Int64>(offsetTmp);
-				var strideVec = new Vector<Int64>(unchecked((Int64)width * step));
-				var baseVec = new Vector<Int64>(first);
+				Vector<Int64> laneOffsets = new(offsetTmp);
+				Vector<Int64> strideVec = new(unchecked((Int64)width * step));
+				Vector<Int64> baseVec = new(first);
 				unchecked { baseVec += laneOffsets; }
 
 				Int32 limit = count - width;
@@ -737,12 +738,17 @@ public static class BlockedInteger
 
 		public static void DecodeAscending(PbAscendingBlock block, List<Int64> output)
 		{
+			Int32 count = block.Diffs.Count + 1;
+			Int32 start = output.Count;
+			CollectionsMarshal.SetCount(output, start + count);
+			Span<Int64> dest = CollectionsMarshal.AsSpan(output).Slice(start, count);
+
 			Int64 current = block.First;
-			output.Add(current);
-			foreach (UInt64 diff in block.Diffs)
+			dest[0] = current;
+			for (Int32 i = 0; i < block.Diffs.Count; ++i)
 			{
-				current = unchecked(current + (Int64)diff);
-				output.Add(current);
+				current = unchecked(current + (Int64)block.Diffs[i]);
+				dest[i + 1] = current;
 			}
 		}
 
@@ -761,12 +767,17 @@ public static class BlockedInteger
 
 		public static void DecodeDescending(PbDescendingBlock block, List<Int64> output)
 		{
+			Int32 count = block.Diffs.Count + 1;
+			Int32 start = output.Count;
+			CollectionsMarshal.SetCount(output, start + count);
+			Span<Int64> dest = CollectionsMarshal.AsSpan(output).Slice(start, count);
+
 			Int64 current = block.First;
-			output.Add(current);
-			foreach (UInt64 diff in block.Diffs)
+			dest[0] = current;
+			for (Int32 i = 0; i < block.Diffs.Count; ++i)
 			{
-				current = unchecked(current - (Int64)diff);
-				output.Add(current);
+				current = unchecked(current - (Int64)block.Diffs[i]);
+				dest[i + 1] = current;
 			}
 		}
 
@@ -775,26 +786,36 @@ public static class BlockedInteger
 			Debug.Assert(block.Deltas.Count > 0,
 				"DeltaBlock.Deltas must not be empty; encoder never produces this state.");
 
-			foreach (Int64 delta in block.Deltas)
+			Int32 count = block.Deltas.Count;
+			Int32 start = output.Count;
+			CollectionsMarshal.SetCount(output, start + count);
+			Span<Int64> dest = CollectionsMarshal.AsSpan(output).Slice(start, count);
+			Int64 reference = block.Reference;
+			for (Int32 i = 0; i < count; ++i)
 			{
-				output.Add(unchecked(block.Reference + delta));
+				dest[i] = unchecked(reference + block.Deltas[i]);
 			}
 		}
 
 		public static void DecodeDeltaOfDelta(PbDeltaOfDeltaBlock block, List<Int64> output)
 		{
-			output.Add(block.First);
 			Debug.Assert(block.DeltaOfDeltas.Count >= 1,
 				"DeltaOfDeltaBlock.DeltaOfDeltas must not be empty; validator and encoder enforce this.");
 
+			Int32 count = block.DeltaOfDeltas.Count + 2;
+			Int32 start = output.Count;
+			CollectionsMarshal.SetCount(output, start + count);
+			Span<Int64> dest = CollectionsMarshal.AsSpan(output).Slice(start, count);
+
+			dest[0] = block.First;
 			Int64 current = unchecked(block.First + block.FirstDelta);
-			output.Add(current);
+			dest[1] = current;
 			Int64 prevDelta = block.FirstDelta;
-			foreach (Int64 dod in block.DeltaOfDeltas)
+			for (Int32 i = 0; i < block.DeltaOfDeltas.Count; ++i)
 			{
-				Int64 delta = unchecked(prevDelta + dod);
+				Int64 delta = unchecked(prevDelta + block.DeltaOfDeltas[i]);
 				current = unchecked(current + delta);
-				output.Add(current);
+				dest[i + 2] = current;
 				prevDelta = delta;
 			}
 		}
@@ -1065,13 +1086,13 @@ public static class BlockedInteger
 	public sealed class CompressionStatistics
 	{
 		/// <summary>원본 값의 개수.</summary>
-		public Int32 TotalValues { get; set; }
+		public Int64 TotalValues { get; set; }
 
 		/// <summary>원본 크기 (바이트).</summary>
-		public Int32 OriginalSize { get; set; }
+		public Int64 OriginalSize { get; set; }
 
 		/// <summary>압축 크기 (바이트).</summary>
-		public Int32 CompressedSize { get; set; }
+		public Int64 CompressedSize { get; set; }
 
 		/// <summary>
 		/// 압축률 (이론상 0.0 이상, 1.0은 무압축, 0.0에 가까울수록 높은 압축률).
@@ -1090,23 +1111,9 @@ public static class BlockedInteger
 
 		public void CalculateDerivedValues()
 		{
-			if (OriginalSize > 0)
-			{
-				CompressionRatio = (Double)CompressedSize / OriginalSize;
-			}
-			else
-			{
-				CompressionRatio = 0.0;
-			}
+			CompressionRatio = OriginalSize > 0 ? (Double)CompressedSize / OriginalSize : 0.0;
 
-			if (BlockCount > 0)
-			{
-				AverageBlockSize = (Double)CompressedSize / BlockCount;
-			}
-			else
-			{
-				AverageBlockSize = 0.0;
-			}
+			AverageBlockSize = BlockCount > 0 ? (Double)CompressedSize / BlockCount : 0.0;
 		}
 	}
 
