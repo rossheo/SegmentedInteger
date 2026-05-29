@@ -380,6 +380,8 @@ public static class BlockedInteger
 				Int32 bitPos = ascending
 					? (Int32)(buffer[i] - first - 1)
 					: (Int32)(first - buffer[i] - 1);
+				Debug.Assert((UInt32)bitPos < BitmapBlockRange,
+					$"bitPos {bitPos}가 BitmapBlockRange({BitmapBlockRange})를 초과 — 호출자 선택 조건 위반");
 				bits |= 1UL << bitPos;
 			}
 			return bits;

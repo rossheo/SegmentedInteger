@@ -2047,4 +2047,87 @@ public class BlockedIntegerTests
 
 		await Assert.That(pageCount).IsEqualTo(5);  // 30개 값, 7씩 = 5페이지
 	}
+
+	// ─── Decode ↔ DecodePage 정합성 (전체 디코더 vs 페이지 디코더) ───
+	// 각 블록 타입에 대해 Decode(proto) == concat(DecodePage 페이지 sweep)임을 검증.
+	// 두 구현이 독립적으로 존재하므로 미래 수정 시 불일치를 조기 탐지하기 위한 테스트.
+
+	private static async Task AssertPageSweepMatchesDecode(Int64[] input)
+	{
+		BlockedInteger.Encode(input.AsSpan(), out var proto);
+		BlockedInteger.Decode(proto, out var fullResult);
+
+		foreach (Int32 pageSize in new[] { 1, 2, 3, 5, 7 })
+		{
+			Int32 pageCount = BlockedInteger.GetPageCount(proto, pageSize);
+			List<Int64> paged = [];
+			for (Int32 p = 0; p < pageCount; p++)
+			{
+				BlockedInteger.DecodePage(proto, p, pageSize, out var page);
+				paged.AddRange(page);
+			}
+			await Assert.That(paged).IsEquivalentTo(fullResult);
+		}
+	}
+
+	[Test]
+	public async Task DecodePageSweep_ConstantBlock_MatchesDecode()
+	{
+		Int64[] input = new Int64[20];
+		Array.Fill(input, 42L);
+		await AssertPageSweepMatchesDecode(input);
+	}
+
+	[Test]
+	public async Task DecodePageSweep_ArithmeticBlock_MatchesDecode()
+	{
+		Int64[] input = new Int64[15];
+		for (Int32 i = 0; i < input.Length; ++i) input[i] = i * 7L;
+		await AssertPageSweepMatchesDecode(input);
+	}
+
+	[Test]
+	public async Task DecodePageSweep_AscendingBitmapBlock_MatchesDecode()
+	{
+		Int64[] input = [1, 3, 5, 8, 12, 20, 35, 45, 55, 60];
+		await AssertPageSweepMatchesDecode(input);
+	}
+
+	[Test]
+	public async Task DecodePageSweep_AscendingBlock_MatchesDecode()
+	{
+		Int64[] input = new Int64[15];
+		for (Int32 i = 0; i < input.Length; ++i) input[i] = i * (i + 1) / 2;
+		await AssertPageSweepMatchesDecode(input);
+	}
+
+	[Test]
+	public async Task DecodePageSweep_DescendingBitmapBlock_MatchesDecode()
+	{
+		Int64[] input = [60, 55, 45, 35, 20, 12, 8, 5, 3, 1];
+		await AssertPageSweepMatchesDecode(input);
+	}
+
+	[Test]
+	public async Task DecodePageSweep_DescendingBlock_MatchesDecode()
+	{
+		Int64[] input = new Int64[15];
+		for (Int32 i = 0; i < input.Length; ++i) input[i] = (14 - i) * (15 - i) / 2;
+		await AssertPageSweepMatchesDecode(input);
+	}
+
+	[Test]
+	public async Task DecodePageSweep_DeltaOfDeltaBlock_MatchesDecode()
+	{
+		Int64[] input = [1000, 1010, 999, 1009, 998, 1008, 997, 1007, 996, 1006];
+		await AssertPageSweepMatchesDecode(input);
+	}
+
+	[Test]
+	public async Task DecodePageSweep_DeltaBlock_MatchesDecode()
+	{
+		Int64[] input = [100, 5100, 200, 5200, 300, 5300, 400, 5400, 500, 5500,
+		                 600, 5600, 700, 5700, 800, 5800];
+		await AssertPageSweepMatchesDecode(input);
+	}
 }
