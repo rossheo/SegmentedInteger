@@ -609,6 +609,7 @@ public static class BlockedInteger
 		{
 			Int32 count = block.Count;
 			if (count <= 0) return;
+
 			Int32 start = output.Count;
 			CollectionsMarshal.SetCount(output, start + count);
 			CollectionsMarshal.AsSpan(output).Slice(start, count).Fill(block.Value);
@@ -722,6 +723,7 @@ public static class BlockedInteger
 			Int32 start = output.Count;
 			CollectionsMarshal.SetCount(output, start + count);
 			Span<Int64> dest = CollectionsMarshal.AsSpan(output).Slice(start, count);
+
 			Int64 reference = block.Reference;
 			for (Int32 i = 0; i < count; ++i)
 			{
@@ -794,7 +796,8 @@ public static class BlockedInteger
 		}
 
 		// Ascending/DescendingBitmapBlock의 공통 검증 로직
-		private static void ValidateBitmapBlockCore(UInt64 bits, Int32 blockIndex, String label, List<String> errors)
+		private static void ValidateBitmapBlockCore(UInt64 bits, Int32 blockIndex, String label,
+			List<String> errors)
 		{
 			Int32 setBitCount = BitOperations.PopCount(bits) + 1;
 			if (setBitCount < BitmapBlockMinCount)
@@ -819,7 +822,8 @@ public static class BlockedInteger
 		}
 
 		// Ascending/DescendingBlock의 공통 검증 로직
-		private static void ValidateMonotonicBlockCore(Int32 diffsCount, Int32 blockIndex, String label, List<String> errors)
+		private static void ValidateMonotonicBlockCore(Int32 diffsCount, Int32 blockIndex, String label,
+			List<String> errors)
 		{
 			Int32 totalCount = diffsCount + 1;
 			if (totalCount > MaxBlockValues)
