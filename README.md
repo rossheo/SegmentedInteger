@@ -57,16 +57,15 @@
 ### API
 
 ```csharp
-// 인코딩
-BlockedInteger.Encode(ReadOnlySpan<Int64> values, out Pb.BlockedInteger proto);
-BlockedInteger.Encode(IEnumerable<Int64> values, out Pb.BlockedInteger proto);
+// 인코딩 (ReadOnlySpan<Int64> / IEnumerable<Int64> 오버로드)
+Pb.BlockedInteger proto = BlockedInteger.Encode(values);
 
 // 디코딩 (전체)
-BlockedInteger.Decode(Pb.BlockedInteger proto, out IReadOnlyList<Int64> integers);
+IReadOnlyList<Int64> integers = BlockedInteger.Decode(proto);
 
 // 디코딩 (페이지 기반 스트리밍)
 Int32 pageCount = BlockedInteger.GetPageCount(proto, pageSize: 1000);
-BlockedInteger.DecodePage(proto, pageIndex, pageSize, out var page);
+IReadOnlyList<Int64> page = BlockedInteger.DecodePage(proto, pageIndex, pageSize);
 ```
 
 ### 사용 예
@@ -75,7 +74,7 @@ BlockedInteger.DecodePage(proto, pageIndex, pageSize, out var page);
 ```csharp
 Int64[] input = [9000, 9001, 9002, -10001, -10006, -10009, 100, 100, 100];
 
-BlockedInteger.Encode(input, out var proto);
+var proto = BlockedInteger.Encode(input);
 // → 3개 블록으로 자동 분할 (그리디 스트리밍 알고리즘):
 //   Block 0: ArithmeticBlock [9000, 9001, 9002]
 //     (first=9000, step=1, count=3)
@@ -84,7 +83,7 @@ BlockedInteger.Encode(input, out var proto);
 //   Block 2: ConstantBlock [100, 100, 100]
 //     (value=100, count=3)
 
-BlockedInteger.Decode(proto, out var decoded);
+var decoded = BlockedInteger.Decode(proto);
 // → [9000, 9001, 9002, -10001, -10006, -10009, 100, 100, 100]
 ```
 
@@ -92,7 +91,7 @@ BlockedInteger.Decode(proto, out var decoded);
 ```csharp
 Int32 pageCount = BlockedInteger.GetPageCount(proto, pageSize: 1000);
 for (Int32 i = 0; i < pageCount; ++i) {
-    BlockedInteger.DecodePage(proto, i, 1000, out var page);
+    var page = BlockedInteger.DecodePage(proto, i, 1000);
     // → 페이지 단위로 처리
 }
 ```

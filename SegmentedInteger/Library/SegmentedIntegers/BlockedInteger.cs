@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -24,7 +25,8 @@ using PbDescendingBlock = Pb.BlockedInteger.Types.Block.Types.DescendingBlock;
 /// - AscendingBlock:        단조증가(비내림차순) → first + repeated uint64 diffs (≤8191개)
 /// - DescendingBitmapBlock: strictly descending, range ≤ 63, count ≥ 8 → first + uint64 bits
 /// - DescendingBlock:       단조감소(비오름차순) → first + repeated uint64 diffs (≤8191개)
-/// - DeltaOfDeltaBlock:     nearly-arithmetic (encoder: max|dod| ≤ 63, proto limit: ≤ 8,191, count ≥ 3) → first + first_delta + sint64 dods
+/// - DeltaOfDeltaBlock:     nearly-arithmetic (encoder: max|dod| ≤ 63, proto limit: ≤ 8,191, count ≥ 3)
+///                          → first + first_delta + sint64 dods
 /// - DeltaBlock:            range ≤ 8,191 → reference + sint64 deltas (≤2-byte zigzag)
 /// <para>
 /// 인코딩은 deterministic(입력 동일 → 출력 동일)이며 greedy 방식으로 동작합니다.
@@ -32,13 +34,19 @@ using PbDescendingBlock = Pb.BlockedInteger.Types.Block.Types.DescendingBlock;
 /// 약간의 조정으로 더 나은 압축률을 얻을 수 있는 경우도 있습니다.
 /// Constant/Arithmetic 접두부(≥5개)가 있는 비단조 시퀀스는 해당 접두부를 먼저 분리하여 emit합니다.
 /// </para>
+/// <para>
+/// 모든 public 메서드는 호출별로 상태를 갖지 않으므로(Encode는 호출마다 새 BlockAccumulator를 생성),
+/// 동일 proto를 동시에 변경하지 않는 한 스레드로부터 안전하게 호출할 수 있습니다.
+/// </para>
 /// </summary>
 public static class BlockedInteger
 {
 	private const Int64 DeltaBlockMax = (Int64)PbDeltaBlock.Types.RangeLimit.Max; // 8191
 	private const Int64 DeltaOfDeltaBlockMax = (Int64)PbDeltaOfDeltaBlock.Types.DeltaLimit.Max; // 8191
-	private const Int64 DeltaOfDeltaSelectThreshold = 63; // 선택 조건: max|dod| ≤ 63 (varint 1바이트 범위), 아니면 DeltaBlock 사용
-	private const Int32 MaxBlockValues = 8192; // proto 스펙상 repeated 필드의 합리적 상한; Ascending/Descending diff 저장 capacity
+	// 선택 조건: max|dod| ≤ 63 (varint 1바이트 범위), 아니면 DeltaBlock 사용
+	private const Int64 DeltaOfDeltaSelectThreshold = 63;
+	// proto 스펙상 repeated 필드의 합리적 상한; Ascending/Descending diff 저장 capacity
+	private const Int32 MaxBlockValues = 8192;
 	private const Int32 RepeatableBlockMinCount = 3;
 	private const Int32 DeltaOfDeltaBlockMinCount = 3; // first + first_delta + 1개 dod 최소 (validator 최소 단위)
 	private const Int32 PrefixSplitMinCount = 5; // prefix 분리가 이득인 최소 길이 (블록 태그 오버헤드 고려)
@@ -49,34 +57,38 @@ public static class BlockedInteger
 	/// <summary>
 	/// 임의의 Int64 시퀀스를 블록 구조로 인코딩합니다.
 	/// </summary>
-	public static void Encode(ReadOnlySpan<Int64> values, out PbBlockedInteger proto)
+	/// <returns>인코딩된 블록 구조</returns>
+	public static PbBlockedInteger Encode(ReadOnlySpan<Int64> values)
 	{
-		proto = new();
-		if (values.Length == 0) return;
+		PbBlockedInteger proto = new();
+		if (values.Length == 0) return proto;
 
-		BlockAccumulator acc = new();
+		using BlockAccumulator acc = new();
 		foreach (Int64 value in values)
 		{
 			acc.Feed(proto, value);
 		}
 		acc.Flush(proto);
+		return proto;
 	}
 
 	/// <summary>
 	/// 임의의 Int64 시퀀스를 블록 구조로 인코딩합니다.
 	/// </summary>
+	/// <returns>인코딩된 블록 구조</returns>
 	/// <exception cref="ArgumentNullException">values가 null인 경우</exception>
-	public static void Encode(IEnumerable<Int64> values, out PbBlockedInteger proto)
+	public static PbBlockedInteger Encode(IEnumerable<Int64> values)
 	{
 		ArgumentNullException.ThrowIfNull(values);
-		proto = new();
+		PbBlockedInteger proto = new();
 
-		BlockAccumulator acc = new();
+		using BlockAccumulator acc = new();
 		foreach (Int64 value in values)
 		{
 			acc.Feed(proto, value);
 		}
 		acc.Flush(proto);
+		return proto;
 	}
 
 	/// <summary>
@@ -86,20 +98,20 @@ public static class BlockedInteger
 	/// 신뢰된 입력 전용. 각 블록의 내부 invariant(Deltas/DeltaOfDeltas 비어있지 않음 등)를
 	/// 검증하지 않습니다. 신뢰할 수 없는 외부 입력은 먼저 <c>Validators</c>로 검증하세요.
 	/// </remarks>
+	/// <returns>디코딩된 Int64 시퀀스</returns>
 	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
-	public static void Decode(PbBlockedInteger proto, out IReadOnlyList<Int64> integers)
+	public static IReadOnlyList<Int64> Decode(PbBlockedInteger proto)
 	{
 		ArgumentNullException.ThrowIfNull(proto);
 
 		// 2-pass: 첫 순회에서 totalCount를 계산해 List를 정확히 pre-allocate하고,
 		// 두 번째 순회에서 디코딩한다.
-		Int32 totalCount = 0;
-		foreach (PbBlock block in proto.Blocks)
-		{
-			totalCount += Decoders.GetBlockValueCount(block);
-		}
+		Int64 totalCount = Decoders.GetTotalValueCount(proto);
+		if (totalCount > Int32.MaxValue)
+			throw new InvalidOperationException(
+				$"총 값 개수({totalCount})가 List<Int64> 한계({Int32.MaxValue})를 초과");
 
-		List<Int64> result = new(totalCount);
+		List<Int64> result = new((Int32)totalCount);
 
 		foreach (PbBlock block in proto.Blocks)
 		{
@@ -133,7 +145,7 @@ public static class BlockedInteger
 					throw new InvalidOperationException($"알 수 없는 블록 타입: {block.BlockOneofCase}");
 			}
 		}
-		integers = result;
+		return result;
 	}
 
 	/// <summary>
@@ -143,24 +155,21 @@ public static class BlockedInteger
 	/// <param name="pageSize">페이지 크기 (값의 개수)</param>
 	/// <returns>필요한 페이지 개수 (데이터가 없으면 0)</returns>
 	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
-	/// <exception cref="ArgumentException">pageSize &lt;= 0인 경우</exception>
+	/// <exception cref="ArgumentOutOfRangeException">pageSize &lt;= 0인 경우</exception>
 	public static Int32 GetPageCount(PbBlockedInteger proto, Int32 pageSize)
 	{
 		ArgumentNullException.ThrowIfNull(proto);
 		if (pageSize <= 0)
-			throw new ArgumentException(
-				$"pageSize ({pageSize}) must be > 0", nameof(pageSize));
+			throw new ArgumentOutOfRangeException(nameof(pageSize),
+				$"pageSize({pageSize})는 0보다 커야 함");
 
-		Int32 totalValueCount = 0;
-		foreach (PbBlock block in proto.Blocks)
-		{
-			totalValueCount += Decoders.GetBlockValueCount(block);
-		}
+		Int64 totalValueCount = Decoders.GetTotalValueCount(proto);
 
 		if (totalValueCount == 0)
 			return 0;
 
-		return (totalValueCount + pageSize - 1) / pageSize;
+		Int64 pageCount = (totalValueCount + pageSize - 1) / pageSize;
+		return checked((Int32)pageCount);
 	}
 
 	/// <summary>
@@ -169,47 +178,51 @@ public static class BlockedInteger
 	/// <param name="proto">디코딩할 프로토콜 버퍼</param>
 	/// <param name="pageIndex">0-based 페이지 번호</param>
 	/// <param name="pageSize">페이지 크기 (값의 개수)</param>
-	/// <param name="integers">디코딩된 값 목록</param>
+	/// <returns>해당 페이지의 디코딩된 값 목록 (범위를 벗어나면 빈 목록)</returns>
 	/// <remarks>
 	/// pageIndex 범위를 벗어난 경우 빈 결과를 반환합니다.
 	/// 신뢰된 입력 전용. 각 블록의 내부 invariant를 검증하지 않습니다.
 	/// 신뢰할 수 없는 외부 입력은 먼저 <c>Validators</c>로 검증하세요.
 	/// </remarks>
 	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
-	/// <exception cref="ArgumentException">pageIndex &lt; 0 또는 pageSize &lt;= 0인 경우</exception>
-	public static void DecodePage(PbBlockedInteger proto,
-		Int32 pageIndex, Int32 pageSize, out IReadOnlyList<Int64> integers)
+	/// <exception cref="ArgumentOutOfRangeException">pageIndex &lt; 0 또는 pageSize &lt;= 0인 경우</exception>
+	public static IReadOnlyList<Int64> DecodePage(PbBlockedInteger proto,
+		Int32 pageIndex, Int32 pageSize)
 	{
 		ArgumentNullException.ThrowIfNull(proto);
 		if (pageIndex < 0)
-			throw new ArgumentException(
-				$"pageIndex ({pageIndex}) must be >= 0", nameof(pageIndex));
+			throw new ArgumentOutOfRangeException(nameof(pageIndex),
+				$"pageIndex({pageIndex})는 0 이상이어야 함");
 		if (pageSize <= 0)
-			throw new ArgumentException(
-				$"pageSize ({pageSize}) must be > 0", nameof(pageSize));
+			throw new ArgumentOutOfRangeException(nameof(pageSize),
+				$"pageSize({pageSize})는 0보다 커야 함");
 
 		Int64 startLong = checked((Int64)pageIndex * pageSize);
 		Int64 endLong = startLong + pageSize;
 		if (startLong > Int32.MaxValue)
 		{
-			integers = [];
-			return;
+			return [];
 		}
 		Int32 startIndex = checked((Int32)startLong);
 		Int32 endIndex = endLong > Int32.MaxValue ? Int32.MaxValue : checked((Int32)endLong);
 
+		// capacity는 pageSize로 둔다. 전체 블록을 스캔해 정확한 크기를 구하면
+		// 아래 루프의 블록 단위 early-exit 이점을 잃어 페이지네이션이 매번 full scan이 된다.
+		// over-allocation은 호출자가 고른 pageSize로 bounded이므로 그대로 수용한다.
 		List<Int64> result = new(pageSize);
-		Int32 currentIndex = 0;
+		// currentIndex/blockEndIndex는 전체 시퀀스 누적 위치이므로 Int32 wrap을 막기 위해 Int64로 누적한다.
+		Int64 currentIndex = 0;
 
 		foreach (PbBlock block in proto.Blocks)
 		{
 			Int32 blockValueCount = Decoders.GetBlockValueCount(block);
-			Int32 blockEndIndex = currentIndex + blockValueCount;
+			Int64 blockEndIndex = currentIndex + blockValueCount;
 
 			if (blockEndIndex > startIndex && currentIndex < endIndex)
 			{
-				Int32 blockStartOffset = Math.Max(0, startIndex - currentIndex);
-				Int32 blockEndOffset = Math.Min(blockValueCount, endIndex - currentIndex);
+				// 오프셋은 0..blockValueCount 범위이므로 Int32 캐스트가 안전하다.
+				Int32 blockStartOffset = (Int32)Math.Max(0L, startIndex - currentIndex);
+				Int32 blockEndOffset = (Int32)Math.Min(blockValueCount, endIndex - currentIndex);
 
 				Decoders.DecodeBlockPage(block, blockStartOffset, blockEndOffset, result);
 			}
@@ -220,7 +233,7 @@ public static class BlockedInteger
 				break;
 		}
 
-		integers = result;
+		return result;
 	}
 
 	/// <summary>
@@ -241,6 +254,14 @@ public static class BlockedInteger
 			Validators.ValidateBlock(block, blockIndex, errors);
 		}
 
+		// 전체 값 개수가 List<Int64> 한계를 넘으면 Decode가 예외를 던지므로 여기서 미리 보고한다.
+		// (개별 블록은 유효해도 합계가 초과할 수 있다)
+		Int64 totalCount = Decoders.GetTotalValueCount(proto);
+		if (totalCount > Int32.MaxValue)
+		{
+			errors.Add($"전체 값 개수({totalCount})가 디코딩 한계({Int32.MaxValue})를 초과");
+		}
+
 		return errors.Count == 0;
 	}
 
@@ -248,13 +269,13 @@ public static class BlockedInteger
 	/// 압축된 데이터의 통계 정보를 계산합니다.
 	/// </summary>
 	/// <param name="proto">분석할 프로토콜 버퍼</param>
-	/// <param name="statistics">통계 정보</param>
+	/// <returns>압축 통계 정보</returns>
 	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
-	public static void GetCompressionStatistics(PbBlockedInteger proto, out CompressionStatistics statistics)
+	public static CompressionStatistics GetCompressionStatistics(PbBlockedInteger proto)
 	{
 		ArgumentNullException.ThrowIfNull(proto);
 
-		statistics = new()
+		CompressionStatistics statistics = new()
 		{
 			OriginalSize = 0,
 			CompressedSize = proto.CalculateSize(),
@@ -269,6 +290,7 @@ public static class BlockedInteger
 
 		statistics.OriginalSize = statistics.TotalValues * sizeof(Int64);
 		statistics.CalculateDerivedValues();
+		return statistics;
 	}
 
 	private static class Encoders
@@ -310,6 +332,7 @@ public static class BlockedInteger
 		internal static PbBlock EncodeAscending(ReadOnlySpan<Int64> buffer)
 		{
 			PbAscendingBlock block = new() { First = buffer[0] };
+			block.Diffs.Capacity = buffer.Length - 1; // diff 개수를 미리 알 수 있어 내부 재할당을 피한다.
 			for (Int32 i = 1; i < buffer.Length; ++i)
 			{
 				block.Diffs.Add(unchecked((UInt64)(buffer[i] - buffer[i - 1])));
@@ -333,6 +356,7 @@ public static class BlockedInteger
 		internal static PbBlock EncodeDescending(ReadOnlySpan<Int64> buffer)
 		{
 			PbDescendingBlock block = new() { First = buffer[0] };
+			block.Diffs.Capacity = buffer.Length - 1; // diff 개수를 미리 알 수 있어 내부 재할당을 피한다.
 			for (Int32 i = 1; i < buffer.Length; ++i)
 			{
 				block.Diffs.Add(unchecked((UInt64)(buffer[i - 1] - buffer[i])));
@@ -390,6 +414,17 @@ public static class BlockedInteger
 
 	internal static class Decoders
 	{
+		// 모든 블록의 값 개수 합계. 블록 합이 Int32 범위를 넘을 수 있으므로 Int64로 누적한다.
+		public static Int64 GetTotalValueCount(PbBlockedInteger proto)
+		{
+			Int64 total = 0;
+			foreach (PbBlock block in proto.Blocks)
+			{
+				total += GetBlockValueCount(block);
+			}
+			return total;
+		}
+
 		public static Int32 GetBlockValueCount(PbBlock block)
 		{
 			switch (block.BlockOneofCase)
@@ -555,6 +590,7 @@ public static class BlockedInteger
 				current = unchecked(current + sign * (Int64)diffs[i]);
 			}
 
+			// diffs[i]가 만드는 값의 출력 위치는 i+1 (인덱스 0은 first). endOffset(exclusive)과 비교한다.
 			for (Int32 i = skipCount; i < diffs.Count && i + 1 < endOffset; ++i)
 			{
 				current = unchecked(current + sign * (Int64)diffs[i]);
@@ -589,6 +625,7 @@ public static class BlockedInteger
 				current = unchecked(current + prevDelta);
 			}
 
+			// DeltaOfDeltas[i]가 만드는 값의 출력 위치는 i+2 (인덱스 0,1은 first, first+firstDelta).
 			for (Int32 i = skipCount; i < block.DeltaOfDeltas.Count && i + 2 < endOffset; ++i)
 			{
 				Int64 dod = block.DeltaOfDeltas[i];
@@ -601,7 +638,10 @@ public static class BlockedInteger
 		private static void DecodeDeltaPage(PbDeltaBlock block,
 			Int32 startOffset, Int32 endOffset, List<Int64> output)
 		{
-			for (Int32 i = startOffset; i < endOffset && i < block.Deltas.Count; ++i)
+			// Constant/Arithmetic Page와 동일하게 [startOffset, actualEnd) 범위를 클램프한다.
+			// Delta는 각 값이 reference+delta[i]로 인덱스가 곧 위치이므로 first 별도 처리가 없다.
+			Int32 actualEnd = Math.Min(endOffset, block.Deltas.Count);
+			for (Int32 i = startOffset; i < actualEnd; ++i)
 			{
 				output.Add(unchecked(block.Reference + block.Deltas[i]));
 			}
@@ -844,6 +884,9 @@ public static class BlockedInteger
 				return;
 			}
 
+			// validator는 encoder가 생성하는 것보다 넓은 집합을 수용한다.
+			// encoder는 Constant를 RepeatableBlockMinCount(3) 이상에서만 emit하지만,
+			// Count 1~2짜리 블록도 디코딩 가능하므로 외부 도구가 만든 proto를 받아들이기 위해 허용한다.
 			if (block.Count < 1)
 			{
 				errors.Add($"Block[{blockIndex}] (Constant): Count는 1 이상이어야 함 (현재: {block.Count})");
@@ -865,6 +908,9 @@ public static class BlockedInteger
 				return;
 			}
 
+			// validator는 encoder가 생성하는 것보다 넓은 집합을 수용한다.
+			// encoder는 Arithmetic을 RepeatableBlockMinCount(3) 이상에서만 emit하지만,
+			// Count 1~2짜리 블록도 디코딩 가능하므로 외부 도구가 만든 proto를 받아들이기 위해 허용한다.
 			if (block.Count < 1)
 			{
 				errors.Add($"Block[{blockIndex}] (Arithmetic): Count는 1 이상이어야 함 (현재: {block.Count})");
@@ -1034,7 +1080,7 @@ public static class BlockedInteger
 		}
 	}
 
-	private sealed class BlockAccumulator
+	private sealed class BlockAccumulator : IDisposable
 	{
 		[Flags]
 		private enum SequenceFlags : byte
@@ -1048,7 +1094,9 @@ public static class BlockedInteger
 			All = Constant | Arithmetic | Ascending | Descending | StrictlyAscending | StrictlyDescending
 		}
 
-		private readonly Int64[] _buffer = new Int64[MaxBlockValues];
+		// ArrayPool에서 빌린 버퍼. Rent는 MaxBlockValues 이상 크기를 줄 수 있으나
+		// 인덱스는 _bufferCount(< MaxBlockValues)로만 관리하므로 정확한 길이에 의존하지 않는다.
+		private Int64[] _buffer = ArrayPool<Int64>.Shared.Rent(MaxBlockValues);
 		private Int32 _bufferCount;
 		private Int64 _min;
 		private Int64 _max;
@@ -1061,6 +1109,16 @@ public static class BlockedInteger
 		private Int32 _arithmeticPrefixCount; // Arithmetic이 false로 전이될 때의 buffer 길이
 
 		public BlockAccumulator() => Reset();
+
+		public void Dispose()
+		{
+			// null 가드로 double-dispose에서도 한 번만 반환한다. clearArray는 불필요(다음 Rent 후 _bufferCount=0부터 덮어씀).
+			if (_buffer is not null)
+			{
+				ArrayPool<Int64>.Shared.Return(_buffer);
+				_buffer = null!;
+			}
+		}
 
 		private void Reset()
 		{
@@ -1198,7 +1256,8 @@ public static class BlockedInteger
 
 				// Arithmetic prefix 분리: 비단조 데이터에서만 적용.
 				if (_arithmeticPrefixCount >= PrefixSplitMinCount
-					&& (_flags & (SequenceFlags.Constant | SequenceFlags.Ascending | SequenceFlags.Descending)) == 0)
+					&& (_flags & (SequenceFlags.Constant
+						| SequenceFlags.Ascending | SequenceFlags.Descending)) == 0)
 				{
 					proto.Blocks.Add(Encoders.EncodeArithmetic(bufferSpan.Slice(0, _arithmeticPrefixCount)));
 					ReFeed(bufferSpan.Slice(_arithmeticPrefixCount));
