@@ -1937,7 +1937,7 @@ public class BlockedIntegerTests
 		Int64[] input = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 		var proto = BlockedInteger.Encode(input);
 
-		Int32 pageCount = BlockedInteger.GetPageCount(proto, 5);
+		Int64 pageCount = BlockedInteger.GetPageCount(proto, 5);
 
 		await Assert.That(pageCount).IsEqualTo(2);
 	}
@@ -1949,7 +1949,7 @@ public class BlockedIntegerTests
 		Int64[] input = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 		var proto = BlockedInteger.Encode(input);
 
-		Int32 pageCount = BlockedInteger.GetPageCount(proto, 3);
+		Int64 pageCount = BlockedInteger.GetPageCount(proto, 3);
 
 		await Assert.That(pageCount).IsEqualTo(4);
 	}
@@ -1961,7 +1961,7 @@ public class BlockedIntegerTests
 		Int64[] input = [1, 2, 3];
 		var proto = BlockedInteger.Encode(input);
 
-		Int32 pageCount = BlockedInteger.GetPageCount(proto, 10);
+		Int64 pageCount = BlockedInteger.GetPageCount(proto, 10);
 
 		await Assert.That(pageCount).IsEqualTo(1);
 	}
@@ -1973,7 +1973,7 @@ public class BlockedIntegerTests
 		Int64[] input = [1, 2, 3, 4, 5];
 		var proto = BlockedInteger.Encode(input);
 
-		Int32 pageCount = BlockedInteger.GetPageCount(proto, 1000);
+		Int64 pageCount = BlockedInteger.GetPageCount(proto, 1000);
 
 		await Assert.That(pageCount).IsEqualTo(1);
 	}
@@ -1985,7 +1985,7 @@ public class BlockedIntegerTests
 		Int64[] input = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 		var proto = BlockedInteger.Encode(input);
 
-		Int32 pageCount = BlockedInteger.GetPageCount(proto, 1);
+		Int64 pageCount = BlockedInteger.GetPageCount(proto, 1);
 
 		await Assert.That(pageCount).IsEqualTo(10);
 	}
@@ -1996,7 +1996,7 @@ public class BlockedIntegerTests
 		// 빈 프로토 (0개 값)
 		var proto = BlockedInteger.Encode([]);
 
-		Int32 pageCount = BlockedInteger.GetPageCount(proto, 5);
+		Int64 pageCount = BlockedInteger.GetPageCount(proto, 5);
 
 		await Assert.That(pageCount).IsEqualTo(0);
 	}
@@ -2032,7 +2032,7 @@ public class BlockedIntegerTests
 		for (Int64 i = 0; i < input.Length; ++i) input[i] = i;
 		var proto = BlockedInteger.Encode(input);
 
-		Int32 pageCount = BlockedInteger.GetPageCount(proto, 100);
+		Int64 pageCount = BlockedInteger.GetPageCount(proto, 100);
 
 		await Assert.That(pageCount).IsEqualTo(100);
 	}
@@ -2047,7 +2047,7 @@ public class BlockedIntegerTests
 
 		var proto = BlockedInteger.Encode(input);
 
-		Int32 pageCount = BlockedInteger.GetPageCount(proto, 7);
+		Int64 pageCount = BlockedInteger.GetPageCount(proto, 7);
 
 		await Assert.That(pageCount).IsEqualTo(5);  // 30개 값, 7씩 = 5페이지
 	}
@@ -2063,9 +2063,9 @@ public class BlockedIntegerTests
 
 		foreach (Int32 pageSize in new[] { 1, 2, 3, 5, 7 })
 		{
-			Int32 pageCount = BlockedInteger.GetPageCount(proto, pageSize);
+			Int64 pageCount = BlockedInteger.GetPageCount(proto, pageSize);
 			List<Int64> paged = [];
-			for (Int32 p = 0; p < pageCount; p++)
+			for (Int64 p = 0; p < pageCount; p++)
 			{
 				var page = BlockedInteger.DecodePage(proto, p, pageSize);
 				paged.AddRange(page);
@@ -2215,13 +2215,25 @@ public class BlockedIntegerTests
 	}
 
 	[Test]
-	public async Task GetPageCount_PageCountExceedsInt32_Throws()
+	public async Task GetPageCount_PageCountExceedsInt32_ReturnsInt64()
 	{
-		// pageSize=1 → pageCount = totalCount = 2^31 > Int32.MaxValue → checked 캐스트에서 예외.
+		// pageSize=1 → pageCount = totalCount = 2^31 → Int64로 정상 반환.
 		var proto = BuildConstantProto(2, 1 << 30);
 
-		await Assert.That(() => BlockedInteger.GetPageCount(proto, 1))
-			.Throws<OverflowException>();
+		Int64 pageCount = BlockedInteger.GetPageCount(proto, 1);
+
+		await Assert.That(pageCount).IsEqualTo(1L << 31);
+	}
+
+	[Test]
+	public async Task DecodePage_PageIndexBeyondInt32_ReturnsValue()
+	{
+		// 3 * 2^30 ≈ 3.2B 개 값; 위치 2^31 (Int32.MaxValue 초과, 범위 내) 접근.
+		var proto = BuildConstantProto(3, 1 << 30);
+
+		var page = BlockedInteger.DecodePage(proto, 1L << 31, 1);
+
+		await Assert.That(page).IsEquivalentTo(new List<Int64> { 0 });
 	}
 
 	[Test]

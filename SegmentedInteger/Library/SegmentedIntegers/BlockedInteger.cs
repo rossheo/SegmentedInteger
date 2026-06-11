@@ -156,7 +156,7 @@ public static class BlockedInteger
 	/// <returns>필요한 페이지 개수 (데이터가 없으면 0)</returns>
 	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
 	/// <exception cref="ArgumentOutOfRangeException">pageSize &lt;= 0인 경우</exception>
-	public static Int32 GetPageCount(PbBlockedInteger proto, Int32 pageSize)
+	public static Int64 GetPageCount(PbBlockedInteger proto, Int32 pageSize)
 	{
 		ArgumentNullException.ThrowIfNull(proto);
 		if (pageSize <= 0)
@@ -169,7 +169,7 @@ public static class BlockedInteger
 			return 0;
 
 		Int64 pageCount = (totalValueCount + pageSize - 1) / pageSize;
-		return checked((Int32)pageCount);
+		return pageCount;
 	}
 
 	/// <summary>
@@ -187,7 +187,7 @@ public static class BlockedInteger
 	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
 	/// <exception cref="ArgumentOutOfRangeException">pageIndex &lt; 0 또는 pageSize &lt;= 0인 경우</exception>
 	public static IReadOnlyList<Int64> DecodePage(PbBlockedInteger proto,
-		Int32 pageIndex, Int32 pageSize)
+		Int64 pageIndex, Int32 pageSize)
 	{
 		ArgumentNullException.ThrowIfNull(proto);
 		if (pageIndex < 0)
@@ -197,14 +197,8 @@ public static class BlockedInteger
 			throw new ArgumentOutOfRangeException(nameof(pageSize),
 				$"pageSize({pageSize})는 0보다 커야 함");
 
-		Int64 startLong = checked((Int64)pageIndex * pageSize);
-		Int64 endLong = startLong + pageSize;
-		if (startLong > Int32.MaxValue)
-		{
-			return [];
-		}
-		Int32 startIndex = checked((Int32)startLong);
-		Int32 endIndex = endLong > Int32.MaxValue ? Int32.MaxValue : checked((Int32)endLong);
+		Int64 startIndex = checked(pageIndex * pageSize);
+		Int64 endIndex = startIndex + pageSize;
 
 		// capacity는 pageSize로 둔다. 전체 블록을 스캔해 정확한 크기를 구하면
 		// 아래 루프의 블록 단위 early-exit 이점을 잃어 페이지네이션이 매번 full scan이 된다.

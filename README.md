@@ -64,7 +64,7 @@ Pb.BlockedInteger proto = BlockedInteger.Encode(values);
 IReadOnlyList<Int64> integers = BlockedInteger.Decode(proto);
 
 // 디코딩 (페이지 기반 스트리밍)
-Int32 pageCount = BlockedInteger.GetPageCount(proto, pageSize: 1000);
+Int64 pageCount = BlockedInteger.GetPageCount(proto, pageSize: 1000);
 IReadOnlyList<Int64> page = BlockedInteger.DecodePage(proto, pageIndex, pageSize);
 ```
 
@@ -89,8 +89,8 @@ var decoded = BlockedInteger.Decode(proto);
 
 **페이지 기반 스트리밍**:
 ```csharp
-Int32 pageCount = BlockedInteger.GetPageCount(proto, pageSize: 1000);
-for (Int32 i = 0; i < pageCount; ++i) {
+Int64 pageCount = BlockedInteger.GetPageCount(proto, pageSize: 1000);
+for (Int64 i = 0; i < pageCount; ++i) {
     var page = BlockedInteger.DecodePage(proto, i, 1000);
     // → 페이지 단위로 처리
 }
@@ -143,7 +143,7 @@ SortedSetInteger.Decode(proto, out var decoded);
 
 ### System.Numerics Vector 기반 SIMD 최적화
 
-**DecodeConstant**: `Span<long>.Fill()` (런타임 벡터화)
+**DecodeConstant**: `Span<Int64>.Fill()` (런타임 벡터화)
 - 반복 값 채우기 시 런타임이 자동 벡터화
 
 **DecodeArithmetic**: `Vector<T>` 명시적 벡터화 (FillArithmetic)
