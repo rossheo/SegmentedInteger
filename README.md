@@ -213,7 +213,7 @@ SegmentedInteger/
 │   │   │   ├── BlockedInteger.Decoders.cs     # 블록 타입별 디코더 (페이지 기반)
 │   │   │   ├── BlockedInteger.Validators.cs   # 블록 무결성 검증
 │   │   │   ├── BlockedInteger.Statistics.cs   # 압축 통계
-│   │   │   ├── SortedSetInteger.cs
+│   │   │   └── SortedSetInteger.cs
 │   │   └── Disposables/
 │   │       └── ElapseWriter.cs
 │   │
