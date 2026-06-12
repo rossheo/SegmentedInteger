@@ -44,15 +44,21 @@
 
 **주요 제약조건**:
 - **블록당 값 수**: 최대 8,192개 (proto spec 준수)
-- **ConstantBlock·ArithmeticBlock**: count ≥ 3 필수
-- **BitmapBlock**: range ≤ 63, count ≥ 8 필수, strictly ascending/descending 필수
+- **ConstantBlock·ArithmeticBlock**: count ≥ 3 (인코더 선택 조건)
+- **BitmapBlock**: range ≤ 63 (포맷 스펙), count ≥ 8 (인코더 선택 조건), strictly ascending/descending 필수
 - **DeltaOfDeltaBlock**: max|dod| ≤ 63만 인코더 선택 (proto limit ≤ 8,191), count ≥ 3
 - **DeltaBlock**: range ≤ 8,191 (2-byte zigzag 저장)
+
+> **검증 정책**: `TryValidate`는 "디코딩 가능 + proto 스펙 한계 내"를 기준으로 합니다.
+> 인코더 선택 휴리스틱(최소 count 등)은 강제하지 않으므로 외부 도구가 만든
+> count 1~2짜리 Constant/Arithmetic, DoD 0개(count 2) 블록 등도 유효합니다.
 
 **블록 분리**:
 - 단조성(ascending/descending)이 동시에 깨지고 range > 8,191 → 새 블록 시작
 - 블록 값 수가 8,192 초과 → 자동 분리
 - Constant/Arithmetic 접두부(≥5개)가 비단조 데이터 앞에 있으면 접두부를 먼저 분리하여 emit
+- 비단조 구간 누적 중 등차/동일값 run(≥5개)이 형성되면 그 앞부분(head)을 먼저 분리하여 emit (suffix 분리)
+  — run은 Constant/Arithmetic 블록 후보로 이어짐
 
 ### API
 
@@ -63,9 +69,18 @@ Pb.BlockedInteger proto = BlockedInteger.Encode(values);
 // 디코딩 (전체)
 IReadOnlyList<Int64> integers = BlockedInteger.Decode(proto);
 
-// 디코딩 (페이지 기반 스트리밍)
+// 디코딩 (페이지 단위 임의 접근)
 Int64 pageCount = BlockedInteger.GetPageCount(proto, pageSize: 1000);
 IReadOnlyList<Int64> page = BlockedInteger.DecodePage(proto, pageIndex, pageSize);
+
+// 디코딩 (전체 순차 소비 — 블록을 한 번만 순회하는 지연 열거)
+IEnumerable<IReadOnlyList<Int64>> pages = BlockedInteger.DecodePages(proto, pageSize: 1000);
+
+// 검증 (신뢰할 수 없는 외부 proto는 디코딩 전에 검증)
+bool isValid = BlockedInteger.TryValidate(proto, out List<String> errors);
+
+// 압축 통계
+var stats = BlockedInteger.GetCompressionStatistics(proto);
 ```
 
 ### 사용 예
@@ -89,11 +104,14 @@ var decoded = BlockedInteger.Decode(proto);
 
 **페이지 기반 스트리밍**:
 ```csharp
-Int64 pageCount = BlockedInteger.GetPageCount(proto, pageSize: 1000);
-for (Int64 i = 0; i < pageCount; ++i) {
-    var page = BlockedInteger.DecodePage(proto, i, 1000);
-    // → 페이지 단위로 처리
+// 전체를 순차 소비할 때는 DecodePages 권장 (블록 목록을 한 번만 순회)
+foreach (var page in BlockedInteger.DecodePages(proto, pageSize: 1000)) {
+    // → 페이지 단위로 처리 (마지막 페이지는 pageSize보다 작을 수 있음)
 }
+
+// 특정 페이지만 필요할 때는 DecodePage (호출마다 블록 목록을 처음부터 스캔)
+Int64 pageCount = BlockedInteger.GetPageCount(proto, pageSize: 1000);
+var page5 = BlockedInteger.DecodePage(proto, pageIndex: 5, pageSize: 1000);
 ```
 ---
 
@@ -143,14 +161,18 @@ SortedSetInteger.Decode(proto, out var decoded);
 
 ### System.Numerics Vector 기반 SIMD 최적화
 
-**DecodeConstant**: `Span<Int64>.Fill()` (런타임 벡터화)
+**Constant 디코딩 (DecodeConstantPage)**: `Span<Int64>.Fill()` (런타임 벡터화)
 - 반복 값 채우기 시 런타임이 자동 벡터화
 
-**DecodeArithmetic**: `Vector<T>` 명시적 벡터화 (FillArithmetic)
+**Arithmetic 디코딩 (DecodeArithmeticPage → FillArithmetic)**: `Vector<T>` 명시적 벡터화
 - 플랫폼 자동 선택: AVX2(width=4) / NEON(width=2) / AVX-512(width=8)
 - `Vector.IsHardwareAccelerated` 확인 후 벡터 연산 사용
 - 꼬리(tail) 처리: 벡터화 후 남은 요소는 스칼라로 처리
 - `unchecked()` 블록: CheckForOverflowUnderflow=true 대응
+
+**디코더 단일화**:
+- 전체 디코딩(`Decode`)은 페이지 디코딩의 특수 경우(`[0, count)`)로 위임 → 블록 타입별 구현이 한 벌
+- 페이지 디코더도 동일한 `SetCount` + Span 기법 사용으로 성능 손실 없음
 
 **CollectionsMarshal 버퍼 관리**:
 - `SetCount`으로 List 재할당 없이 한 번에 용량 확보
@@ -184,8 +206,13 @@ SegmentedInteger/
 │   │   ├── Library.csproj
 │   │   ├── Protos/default.proto      # Protobuf 스키마
 │   │   ├── ProtoOuts/Default.cs      # protoc 자동 생성 (git 제외)
-│   │   ├── SegmentedIntegers/
-│   │   │   ├── BlockedInteger.cs
+│   │   ├── SegmentedIntegers/            # BlockedInteger는 역할별 partial 파일로 분리
+│   │   │   ├── BlockedInteger.cs              # 공개 API + 상수
+│   │   │   ├── BlockedInteger.Accumulator.cs  # BlockAccumulator (스트리밍 블록 선택)
+│   │   │   ├── BlockedInteger.Encoders.cs     # 블록 타입별 인코더
+│   │   │   ├── BlockedInteger.Decoders.cs     # 블록 타입별 디코더 (페이지 기반)
+│   │   │   ├── BlockedInteger.Validators.cs   # 블록 무결성 검증
+│   │   │   ├── BlockedInteger.Statistics.cs   # 압축 통계
 │   │   │   ├── SortedSetInteger.cs
 │   │   └── Disposables/
 │   │       └── ElapseWriter.cs
@@ -217,7 +244,9 @@ dotnet test --filter BlockedInteger   # BlockedInteger만
 
 **테스트 포함 사항**:
 - 라운드트립 테스트 (encode ↔ decode)
-- 경계 케이스 (count=1, max values)
+- Decode ↔ DecodePage ↔ DecodePages 정합성 sweep (블록 타입별)
+- prefix/suffix 분리 시나리오
+- 경계 케이스 (count=1, max values, Int64.MinValue/MaxValue)
 - Overflow wrap 검증
 - CSV 파일 통합 테스트
 

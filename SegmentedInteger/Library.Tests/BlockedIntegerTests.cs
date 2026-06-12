@@ -366,6 +366,60 @@ public class BlockedIntegerTests
 			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
 	}
 
+	[Test]
+	public async Task SuffixSplit_NonMonotone_ThenConstantRun()
+	{
+		// 비단조 head + 동일값 run(≥5) → head를 분리하고 run은 ConstantBlock으로
+		// head: [10, 5, 12, 3, 9, 6] 비단조, 이어서 7이 50개
+		Int64[] input = new Int64[56];
+		Int64[] head = [10, 5, 12, 3, 9, 6];
+		head.CopyTo(input, 0);
+		for (Int32 i = 6; i < input.Length; ++i) input[i] = 7;
+
+		var proto = BlockedInteger.Encode(input);
+		var result = BlockedInteger.Decode(proto);
+
+		await PrintCompressionStatistics(proto);
+
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+		// run 감지 시점에 head(첫 번째 7 포함)가 분리되고 나머지 7들은 ConstantBlock
+		await Assert.That(proto.Blocks.Count).IsEqualTo(2);
+		await Assert.That(proto.Blocks[^1].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Constant);
+		await Assert.That(proto.Blocks[^1].Constant.Value).IsEqualTo(7L);
+	}
+
+	[Test]
+	public async Task SuffixSplit_NonMonotone_ThenArithmeticRun()
+	{
+		// 비단조 head + 등차 run(≥5) → head를 분리하고 run은 ArithmeticBlock으로
+		// head: [100, 90, 105, 85] 비단조, 이어서 0,10,20,...,490
+		Int64[] input = new Int64[54];
+		Int64[] head = [100, 90, 105, 85];
+		head.CopyTo(input, 0);
+		for (Int32 i = 4; i < input.Length; ++i) input[i] = (i - 4) * 10;
+
+		var proto = BlockedInteger.Encode(input);
+		var result = BlockedInteger.Decode(proto);
+
+		await PrintCompressionStatistics(proto);
+
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+		await Assert.That(proto.Blocks.Count).IsEqualTo(2);
+		await Assert.That(proto.Blocks[^1].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Arithmetic);
+		await Assert.That(proto.Blocks[^1].Arithmetic.Step).IsEqualTo(10L);
+	}
+
+	[Test]
+	public async Task SuffixSplit_RunBreaksEarly_RoundTripPreserved()
+	{
+		// run이 임계 직후 끊겨도 round-trip이 보존되어야 한다
+		// 비단조 head + 7×5 + 다시 비단조
+		Int64[] input = [10, 5, 12, 3, 7, 7, 7, 7, 7, 20, 1, 15, 2];
+		await AssertRoundTrip(input);
+	}
+
 	// ─── 특수 입력 ───
 
 	[Test]
@@ -1235,9 +1289,10 @@ public class BlockedIntegerTests
 	}
 
 	[Test]
-	public async Task ValidateIntegrity_InvalidAscendingBitmapBlock_BelowMinCount()
+	public async Task ValidateIntegrity_AscendingBitmapBlock_BelowEncoderMinCount_Valid()
 	{
-		// AscendingBitmapBlock with count < 8
+		// count < 8은 encoder의 블록 선택 휴리스틱일 뿐 디코딩 가능하므로 valid
+		// (외부 도구가 만든 proto 수용 정책)
 		Pb.BlockedInteger proto = new()
 		{
 			Blocks =
@@ -1254,9 +1309,11 @@ public class BlockedIntegerTests
 		};
 
 		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
-		await Assert.That(isValid).IsFalse();
-		await Assert.That(errors.Count).IsGreaterThan(0);
-		await Assert.That(errors[0]).Contains("최소");
+		await Assert.That(isValid).IsTrue();
+		await Assert.That(errors).IsEmpty();
+
+		var decoded = BlockedInteger.Decode(proto);
+		await Assert.That(decoded).IsEquivalentTo(new Int64[] { 0, 1, 2, 3 });
 	}
 
 	[Test]
@@ -1289,6 +1346,86 @@ public class BlockedIntegerTests
 		await Assert.That(isValid).IsFalse();
 		await Assert.That(errors.Count).IsGreaterThan(0);
 		await Assert.That(errors[0]).Contains("범위");
+	}
+
+	[Test]
+	public async Task ValidateIntegrity_InvalidAscendingBitmapBlock_FirstOverflow()
+	{
+		// First + 범위가 Int64.MaxValue를 넘으면 디코딩 값이 wrap되므로 invalid
+		Pb.BlockedInteger proto = new()
+		{
+			Blocks =
+			{
+				new Pb.BlockedInteger.Types.Block
+				{
+					AscendingBitmap = new Pb.BlockedInteger.Types.Block.Types.AscendingBitmapBlock
+					{
+						First = Int64.MaxValue - 1,
+						Bits = 0b111  // 최대 오프셋 3 → First + 3 overflow
+					}
+				}
+			}
+		};
+
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+
+		await Assert.That(isValid).IsFalse();
+		await Assert.That(errors.Count).IsGreaterThan(0);
+		await Assert.That(errors[0]).Contains("Int64 범위를 벗어남");
+	}
+
+	[Test]
+	public async Task ValidateIntegrity_InvalidDescendingBitmapBlock_FirstUnderflow()
+	{
+		// First - 범위가 Int64.MinValue 아래로 내려가면 디코딩 값이 wrap되므로 invalid
+		Pb.BlockedInteger proto = new()
+		{
+			Blocks =
+			{
+				new Pb.BlockedInteger.Types.Block
+				{
+					DescendingBitmap = new Pb.BlockedInteger.Types.Block.Types.DescendingBitmapBlock
+					{
+						First = Int64.MinValue + 1,
+						Bits = 0b111  // 최대 오프셋 3 → First - 3 underflow
+					}
+				}
+			}
+		};
+
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+
+		await Assert.That(isValid).IsFalse();
+		await Assert.That(errors.Count).IsGreaterThan(0);
+		await Assert.That(errors[0]).Contains("Int64 범위를 벗어남");
+	}
+
+	[Test]
+	public async Task ValidateIntegrity_AscendingBitmapBlock_FirstAtBoundary_Valid()
+	{
+		// First + 최대 오프셋이 정확히 Int64.MaxValue면 wrap 없음 → valid
+		Pb.BlockedInteger proto = new()
+		{
+			Blocks =
+			{
+				new Pb.BlockedInteger.Types.Block
+				{
+					AscendingBitmap = new Pb.BlockedInteger.Types.Block.Types.AscendingBitmapBlock
+					{
+						First = Int64.MaxValue - 3,
+						Bits = 0b111  // 최대 오프셋 3 → 마지막 값이 정확히 Int64.MaxValue
+					}
+				}
+			}
+		};
+
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+
+		await Assert.That(isValid).IsTrue();
+		await Assert.That(errors).IsEmpty();
+
+		var decoded = BlockedInteger.Decode(proto);
+		await Assert.That(decoded[^1]).IsEqualTo(Int64.MaxValue);
 	}
 
 	[Test]
@@ -1356,9 +1493,10 @@ public class BlockedIntegerTests
 	}
 
 	[Test]
-	public async Task ValidateIntegrity_InvalidDeltaOfDeltaBlock_EmptyDeltaOfDeltas()
+	public async Task ValidateIntegrity_DeltaOfDeltaBlock_EmptyDeltaOfDeltas_Valid()
 	{
-		// DeltaOfDeltaBlock with DeltaOfDeltas.Count == 0 (invalid)
+		// DeltaOfDeltas가 비어 있어도 first + firstDelta 두 값으로 디코딩 가능하므로 valid
+		// (외부 도구가 만든 proto 수용 정책; encoder는 count ≥ 3에서만 emit)
 		Pb.BlockedInteger proto = new()
 		{
 			Blocks =
@@ -1377,9 +1515,11 @@ public class BlockedIntegerTests
 
 		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
 
-		await Assert.That(isValid).IsFalse();
-		await Assert.That(errors.Count).IsGreaterThan(0);
-		await Assert.That(errors[0]).Contains("DeltaOfDeltas는 1개 이상");
+		await Assert.That(isValid).IsTrue();
+		await Assert.That(errors).IsEmpty();
+
+		var decoded = BlockedInteger.Decode(proto);
+		await Assert.That(decoded).IsEquivalentTo(new Int64[] { 100, 110 });
 	}
 
 	[Test]
@@ -1397,6 +1537,33 @@ public class BlockedIntegerTests
 						First = 0,
 						FirstDelta = 100,
 						DeltaOfDeltas = { 9000 }  // |dod| = 9000 > 8191
+					}
+				}
+			}
+		};
+
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+
+		await Assert.That(isValid).IsFalse();
+		await Assert.That(errors.Count).IsGreaterThan(0);
+		await Assert.That(errors[0]).Contains("max|delta-of-delta|는");
+	}
+
+	[Test]
+	public async Task ValidateIntegrity_InvalidDeltaOfDeltaBlock_DodInt64MinValue()
+	{
+		// |Int64.MinValue|는 Int64로 표현 불가 — 부호 반전이 wrap해도 검증에서 걸러져야 한다
+		Pb.BlockedInteger proto = new()
+		{
+			Blocks =
+			{
+				new Pb.BlockedInteger.Types.Block
+				{
+					DeltaOfDelta = new Pb.BlockedInteger.Types.Block.Types.DeltaOfDeltaBlock
+					{
+						First = 0,
+						FirstDelta = 100,
+						DeltaOfDeltas = { Int64.MinValue }
 					}
 				}
 			}
@@ -2052,9 +2219,9 @@ public class BlockedIntegerTests
 		await Assert.That(pageCount).IsEqualTo(5);  // 30개 값, 7씩 = 5페이지
 	}
 
-	// ─── Decode ↔ DecodePage 정합성 (전체 디코더 vs 페이지 디코더) ───
-	// 각 블록 타입에 대해 Decode(proto) == concat(DecodePage 페이지 sweep)임을 검증.
-	// 두 구현이 독립적으로 존재하므로 미래 수정 시 불일치를 조기 탐지하기 위한 테스트.
+	// ─── Decode ↔ DecodePage ↔ DecodePages 정합성 ───
+	// 각 블록 타입에 대해 Decode(proto) == concat(DecodePage 페이지 sweep) == concat(DecodePages)임을 검증.
+	// 구현이 독립적으로 존재하므로 미래 수정 시 불일치를 조기 탐지하기 위한 테스트.
 
 	private static async Task AssertPageSweepMatchesDecode(Int64[] input)
 	{
@@ -2071,6 +2238,17 @@ public class BlockedIntegerTests
 				paged.AddRange(page);
 			}
 			await Assert.That(paged).IsEquivalentTo(fullResult);
+
+			List<Int64> streamed = [];
+			Int32 streamedPageCount = 0;
+			foreach (var page in BlockedInteger.DecodePages(proto, pageSize))
+			{
+				await Assert.That(page.Count).IsLessThanOrEqualTo(pageSize);
+				streamed.AddRange(page);
+				streamedPageCount++;
+			}
+			await Assert.That(streamed).IsEquivalentTo(fullResult);
+			await Assert.That((Int64)streamedPageCount).IsEqualTo(pageCount);
 		}
 	}
 
@@ -2133,6 +2311,52 @@ public class BlockedIntegerTests
 		Int64[] input = [100, 5100, 200, 5200, 300, 5300, 400, 5400, 500, 5500,
 		                 600, 5600, 700, 5700, 800, 5800];
 		await AssertPageSweepMatchesDecode(input);
+	}
+
+	// ─── DecodePages ───
+
+	[Test]
+	public async Task DecodePages_EmptyProto_YieldsNothing()
+	{
+		Pb.BlockedInteger proto = new();
+
+		await Assert.That(BlockedInteger.DecodePages(proto, 5).Any()).IsFalse();
+	}
+
+	[Test]
+	public async Task DecodePages_LastPage_PartialFill()
+	{
+		Int64[] input = [1, 2, 3, 4, 5, 6, 7];
+		var proto = BlockedInteger.Encode(input);
+
+		var pages = BlockedInteger.DecodePages(proto, 3).ToList();
+
+		await Assert.That(pages.Count).IsEqualTo(3);
+		await Assert.That(pages[0]).IsEquivalentTo(new Int64[] { 1, 2, 3 });
+		await Assert.That(pages[1]).IsEquivalentTo(new Int64[] { 4, 5, 6 });
+		await Assert.That(pages[2]).IsEquivalentTo(new Int64[] { 7 });
+	}
+
+	[Test]
+	public async Task DecodePages_InvalidPageSize_ThrowsImmediately()
+	{
+		Int64[] input = [1, 2, 3];
+		var proto = BlockedInteger.Encode(input);
+
+		// iterator의 deferred execution과 무관하게 호출 즉시 예외가 발생해야 한다
+		await Assert.That(() =>
+		{
+			BlockedInteger.DecodePages(proto, 0);
+		}).Throws<ArgumentOutOfRangeException>();
+	}
+
+	[Test]
+	public async Task DecodePages_NullProto_ThrowsImmediately()
+	{
+		await Assert.That(() =>
+		{
+			BlockedInteger.DecodePages(null!, 5);
+		}).Throws<ArgumentNullException>();
 	}
 
 	// ─── 페이지 경계 (E2) ───
