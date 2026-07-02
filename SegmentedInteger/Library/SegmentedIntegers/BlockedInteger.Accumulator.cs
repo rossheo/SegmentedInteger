@@ -286,6 +286,17 @@ public static partial class BlockedInteger
 			{
 				proto.Blocks.Add(Encoders.EncodeDescending(bufferSpan));
 			}
+			else if (bufferSpan.Length <= 2)
+			{
+				// SplitTrailingRun의 head는 1~2개까지 짧아질 수 있고, 이때 flags는
+				// 전체 버퍼 기준이라 위의 단조 분기에 걸리지 않는다. 1~2개 값은 그 자체로
+				// 항상 단조이므로 Ascending/Descending으로 emit한다. Delta로 보내면
+				// 극값 wrap aliasing 케이스에서 range > 8191인 블록이 만들어져
+				// TryValidate가 실패할 수 있고, 정상 케이스에서도 Asc/Desc 쪽이 더 작다.
+				proto.Blocks.Add(bufferSpan.Length == 2 && bufferSpan[0] > bufferSpan[1]
+					? Encoders.EncodeDescending(bufferSpan)
+					: Encoders.EncodeAscending(bufferSpan));
+			}
 			else if (_maxAbsDod <= (UInt64)DeltaOfDeltaSelectThreshold
 				&& bufferSpan.Length >= DeltaOfDeltaBlockMinCount)
 			{

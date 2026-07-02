@@ -162,8 +162,13 @@ public static partial class BlockedInteger
 			throw new ArgumentOutOfRangeException(nameof(pageSize),
 				$"pageSize({pageSize})는 0보다 커야 함");
 
-		Int64 startIndex = checked(pageIndex * pageSize);
-		Int64 endIndex = checked(startIndex + pageSize);
+		// pageIndex * pageSize + pageSize가 Int64 범위를 넘는 위치에는 어떤 데이터도
+		// 도달할 수 없으므로, 문서화된 계약(범위 밖 → 빈 목록)에 따라 빈 결과를 반환한다.
+		if (pageIndex > (Int64.MaxValue - pageSize) / pageSize)
+			return [];
+
+		Int64 startIndex = pageIndex * pageSize;
+		Int64 endIndex = startIndex + pageSize;
 
 		// capacity는 pageSize로 둔다. 전체 블록을 스캔해 정확한 크기를 구하면
 		// 아래 루프의 블록 단위 early-exit 이점을 잃어 페이지네이션이 매번 full scan이 된다.

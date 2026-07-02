@@ -420,6 +420,53 @@ public class BlockedIntegerTests
 		await AssertRoundTrip(input);
 	}
 
+	[Test]
+	public async Task SuffixSplit_TwoElementHead_EmitsMonotonicBlock()
+	{
+		// 비단조 head 2개 + 등차 run(5) → head는 그 자체로 단조이므로
+		// Delta가 아닌 Descending/Ascending 블록으로 분리되어야 한다
+		// deltas: -5, 3, 4, 4, 4, 4 — run(step 4) 5개가 [10, 5]를 head로 분리
+		Int64[] input = [10, 5, 8, 12, 16, 20, 24];
+		var proto = BlockedInteger.Encode(input);
+		var result = BlockedInteger.Decode(proto);
+
+		await PrintCompressionStatistics(proto);
+
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+		await Assert.That(proto.Blocks.Count).IsEqualTo(2);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Descending);
+		await Assert.That(proto.Blocks[1].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Arithmetic);
+	}
+
+	[Test]
+	public async Task SuffixSplit_TinyHead_WrapAliasedRange_EncodeOutputValidates()
+	{
+		// 극값 근처 wrap aliasing: 실제 range는 2^63 수준이지만 wrapped delta끼리의
+		// dod는 63 이하라 한 버퍼에 누적된다. 이어지는 등차 run(5)으로 head 2개가
+		// 분리될 때 Delta 블록으로 emit되면 range > 8191이라 TryValidate가 실패한다.
+		// head는 단조 블록으로 emit되어야 하며, encoder 출력은 항상 valid해야 한다.
+		Int64 quarter = 1L << 62;
+		Int64 d1 = unchecked((-1L << 63) + 32); // 두 번째 delta (wrapped)
+		Int64 d = d1 + 63;                      // run delta (|dod| = 63)
+		Int64[] input = new Int64[7];
+		input[0] = -quarter;
+		input[1] = quarter;
+		input[2] = unchecked(input[1] + d1);
+		for (Int32 i = 3; i < input.Length; ++i) input[i] = unchecked(input[i - 1] + d);
+
+		var proto = BlockedInteger.Encode(input);
+		var result = BlockedInteger.Decode(proto);
+
+		await PrintCompressionStatistics(proto);
+
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+		bool isValid = BlockedInteger.TryValidate(proto, out var errors);
+		await Assert.That(errors).IsEmpty();
+		await Assert.That(isValid).IsTrue();
+	}
+
 	// ─── 특수 입력 ───
 
 	[Test]
@@ -1844,6 +1891,18 @@ public class BlockedIntegerTests
 		var proto = BlockedInteger.Encode(input);
 
 		var result = BlockedInteger.DecodePage(proto, 10, 3);
+
+		await Assert.That(result).IsEmpty();
+	}
+
+	[Test]
+	public async Task DecodePage_HugePageIndex_OverflowingOffset_ReturnsEmpty()
+	{
+		// pageIndex * pageSize가 Int64를 초과하는 위치 → 예외 없이 빈 목록 (문서 계약)
+		Int64[] input = [1, 2, 3, 4, 5];
+		var proto = BlockedInteger.Encode(input);
+
+		var result = BlockedInteger.DecodePage(proto, Int64.MaxValue, 1000);
 
 		await Assert.That(result).IsEmpty();
 	}
