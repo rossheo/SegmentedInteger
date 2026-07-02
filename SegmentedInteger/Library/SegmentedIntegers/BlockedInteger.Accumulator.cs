@@ -173,29 +173,50 @@ public static partial class BlockedInteger
 				Debug.Assert(added, "TryAdd failed after flush — logic invariant violated.");
 			}
 
-			// Suffix 분리: 비단조(Delta/DoD) 구간에 등차/동일값 run이 형성되면,
+			// Suffix 분리: 누적 구간에 등차/동일값 run이 형성되면,
 			// run이 임계 길이에 도달한 시점에 head를 먼저 emit하고 run을 새 버퍼로 옮긴다.
 			// run은 새 버퍼에서 Constant/Arithmetic 후보로 자연스럽게 이어진다.
-			// (== 비교: run은 단조 구간이므로 한 run당 정확히 한 번만 트리거된다)
-			if (_trailingRunLength == PrefixSplitMinCount
-				&& _bufferCount > _trailingRunLength
-				&& (_flags & (SequenceFlags.Ascending | SequenceFlags.Descending)) == 0)
+			// 임계: 비단조 구간은 PrefixSplitMinCount(5). 단조 구간은 run을 분리하지 않아도
+			// diff당 1~2바이트로 인코딩되므로 MonotonicRunSplitMinCount(16)부터 이득이다.
+			// (== 비교: run 내 delta는 모두 같아 run 도중 단조성 전이가 일어날 수 없고
+			//  임계도 바뀌지 않으므로, 한 run당 정확히 한 번만 트리거된다)
+			Int32 splitThreshold =
+				(_flags & (SequenceFlags.Ascending | SequenceFlags.Descending)) == 0
+					? PrefixSplitMinCount
+					: MonotonicRunSplitMinCount;
+			if (_trailingRunLength == splitThreshold && _bufferCount > _trailingRunLength)
 			{
 				SplitTrailingRun(proto);
 			}
 		}
 
-		// head(buffer 앞부분)를 현재 누적 통계로 emit하고 trailing run을 ReFeed한다.
-		// 비단조 모드에서만 호출되므로 head는 SelectAndEmitBlock의 DoD/Delta 분기로 떨어진다.
-		// _min/_max/_maxAbsDod는 run을 포함한 전체 버퍼 기준이지만 head 값들은 그 부분집합이므로
-		// (range ≤ 8191 ∨ maxAbsDod ≤ 63 불변 조건 포함) 항상 유효한 블록이 만들어진다.
+		// buffer를 head와 trailing run으로 나눈다. head는 Flush와 동일한 prefix-split
+		// 경로로 emit하여 head 내부의 Constant/Arithmetic prefix(예: 직전 plateau)도
+		// 같은 기준으로 분리되게 하고, run은 복사 후 ReFeed하여 새 버퍼에서
+		// Constant/Arithmetic 후보로 잇는다.
+		// _flags/_min/_max/_maxAbsDod는 run을 포함한 전체 버퍼 기준의 보수적 근사지만
+		// head는 그 부분집합이므로 (range ≤ 8191 ∨ maxAbsDod ≤ 63 불변 조건 포함)
+		// 항상 유효한 블록이 만들어진다.
 		private void SplitTrailingRun(PbBlockedInteger proto)
 		{
-			ReadOnlySpan<Int64> bufferSpan = new(_buffer, 0, _bufferCount);
 			Int32 headCount = _bufferCount - _trailingRunLength;
 
-			SelectAndEmitBlock(proto, bufferSpan.Slice(0, headCount));
-			ReFeed(bufferSpan.Slice(headCount));
+			// run 길이는 트리거 시점의 임계값으로 고정되므로 stackalloc이 안전하다.
+			Debug.Assert(_trailingRunLength <= MonotonicRunSplitMinCount,
+				"run 길이가 분리 임계를 초과 — Feed 트리거 조건 위반");
+			Span<Int64> run = stackalloc Int64[MonotonicRunSplitMinCount];
+			run = run.Slice(0, _trailingRunLength);
+			new ReadOnlySpan<Int64>(_buffer, headCount, _trailingRunLength).CopyTo(run);
+
+			// head만 남기고 Flush한다. run의 첫 값이 head의 Constant/Arithmetic prefix를
+			// 한 칸 연장한 경우 prefix 카운트가 headCount를 1 초과할 수 있으므로 클램프한다
+			// (prefix 성립 구간의 부분집합인 head 앞부분도 당연히 성립하므로 안전).
+			_bufferCount = headCount;
+			_constantPrefixCount = Math.Min(_constantPrefixCount, headCount);
+			_arithmeticPrefixCount = Math.Min(_arithmeticPrefixCount, headCount);
+			Flush(proto);
+
+			ReFeed(run);
 		}
 
 		public void Flush(PbBlockedInteger proto)
@@ -206,20 +227,31 @@ public static partial class BlockedInteger
 			{
 				ReadOnlySpan<Int64> bufferSpan = new(_buffer, 0, _bufferCount);
 
-				// Constant prefix 분리: 데이터가 비단조가 되었을 때만 적용.
-				// 단조(ascending/descending) 상태라면 ascending/bitmap 블록이 더 유리할 수 있음.
-				if (_constantPrefixCount >= PrefixSplitMinCount
-					&& (_flags & (SequenceFlags.Ascending | SequenceFlags.Descending)) == 0)
+				// Prefix 분리 임계: 비단조 구간은 PrefixSplitMinCount(5).
+				// 단조 구간은 prefix를 분리하지 않아도 diff당 1~2바이트로 인코딩되므로
+				// 블록 고정 비용을 확실히 상회하는 MonotonicRunSplitMinCount(16)부터 이득이다.
+				Int32 prefixSplitThreshold =
+					(_flags & (SequenceFlags.Ascending | SequenceFlags.Descending)) == 0
+						? PrefixSplitMinCount
+						: MonotonicRunSplitMinCount;
+
+				// Constant prefix 분리 (전체가 Constant면 prefix 카운트가 0이므로 자연 제외).
+				if (_constantPrefixCount >= prefixSplitThreshold)
 				{
 					proto.Blocks.Add(Encoders.EncodeConstant(bufferSpan.Slice(0, _constantPrefixCount)));
 					ReFeed(bufferSpan.Slice(_constantPrefixCount));
 					continue;
 				}
 
-				// Arithmetic prefix 분리: 비단조 데이터에서만 적용.
-				if (_arithmeticPrefixCount >= PrefixSplitMinCount
-					&& (_flags & (SequenceFlags.Constant
-						| SequenceFlags.Ascending | SequenceFlags.Descending)) == 0)
+				// Arithmetic prefix 분리. 전체 버퍼가 Bitmap 후보(strictly 단조 + range ≤ 63)라면
+				// 단일 Bitmap 블록이 분리보다 작으므로 분리하지 않는다.
+				bool bitmapEligible =
+					(_flags & (SequenceFlags.StrictlyAscending | SequenceFlags.StrictlyDescending)) != 0
+					&& _bufferCount >= BitmapBlockMinCount
+					&& unchecked((UInt64)(_max - _min)) <= (UInt64)BitmapBlockRange;
+				if (_arithmeticPrefixCount >= prefixSplitThreshold
+					&& (_flags & SequenceFlags.Constant) == 0
+					&& !bitmapEligible)
 				{
 					proto.Blocks.Add(Encoders.EncodeArithmetic(bufferSpan.Slice(0, _arithmeticPrefixCount)));
 					ReFeed(bufferSpan.Slice(_arithmeticPrefixCount));

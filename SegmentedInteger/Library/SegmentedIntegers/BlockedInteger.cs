@@ -20,8 +20,10 @@ using PbDeltaOfDeltaBlock = Pb.BlockedInteger.Types.Block.Types.DeltaOfDeltaBloc
 /// 인코딩은 deterministic(입력 동일 → 출력 동일)이며 greedy 방식으로 동작합니다.
 /// BlockAccumulator는 스트리밍 방식으로 최적 블록 타입을 선택하되 백트래킹을 하지 않으므로,
 /// 약간의 조정으로 더 나은 압축률을 얻을 수 있는 경우도 있습니다.
-/// Constant/Arithmetic 접두부(≥5개)가 있는 비단조 시퀀스는 해당 접두부를 먼저 분리하여 emit하며,
-/// 비단조 구간 누적 중 등차/동일값 run(≥5개)이 형성되면 그 앞부분을 분리하여 emit합니다(suffix 분리).
+/// Constant/Arithmetic 접두부는 임계 길이 이상이면 먼저 분리하여 emit하며(prefix 분리),
+/// 누적 중 등차/동일값 run이 임계 길이에 도달하면 그 앞부분을 분리하여 emit합니다(suffix 분리).
+/// 임계 길이는 비단조 구간 5개, 단조 구간 16개입니다(단조 구간은 diff 인코딩이 이미 저렴하므로
+/// 블록 고정 비용을 상회하는 길이부터 분리).
 /// </para>
 /// <para>
 /// 모든 public 메서드는 호출별로 상태를 갖지 않으므로(Encode는 호출마다 새 BlockAccumulator를 생성),
@@ -43,6 +45,10 @@ public static partial class BlockedInteger
 	private const Int32 RepeatableBlockMinCount = 3;
 	private const Int32 DeltaOfDeltaBlockMinCount = 3; // first + first_delta + 1개 dod 최소 (validator 최소 단위)
 	private const Int32 PrefixSplitMinCount = 5; // prefix 분리가 이득인 최소 길이 (블록 태그 오버헤드 고려)
+	// 단조 버퍼에서 trailing run 분리 임계. 단조 구간의 run은 분리하지 않아도
+	// diff당 1~2바이트로 인코딩되므로, Constant/Arithmetic 블록 고정 비용(~10바이트)과
+	// 블록 경계 오버헤드를 확실히 상회하는 길이부터 분리한다.
+	private const Int32 MonotonicRunSplitMinCount = 16;
 	private const Int32 BitmapBlockMinCount = 8;
 	private const Int64 BitmapBlockRange = 63;
 	private const Int32 UInt64BitWidth = 64;

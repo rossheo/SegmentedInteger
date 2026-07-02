@@ -467,6 +467,97 @@ public class BlockedIntegerTests
 		await Assert.That(isValid).IsTrue();
 	}
 
+	// ─── 단조 구간 run 분리 ───
+
+	[Test]
+	public async Task MonotonicSplit_LongPlateau_EmitsConstantBlock()
+	{
+		// 오름차순 진행 중 긴 동일값 run(≥16) → Constant 블록으로 분리
+		// (분리하지 않으면 zero-diff가 값당 1바이트씩 누적)
+		Int64[] input = new Int64[104];
+		input[0] = 0; input[1] = 10;
+		for (Int32 i = 2; i < 102; ++i) input[i] = 20;
+		input[102] = 30; input[103] = 40;
+
+		var proto = BlockedInteger.Encode(input);
+		var result = BlockedInteger.Decode(proto);
+
+		await PrintCompressionStatistics(proto);
+
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+		await Assert.That(proto.Blocks.Count).IsEqualTo(3);
+		await Assert.That(proto.Blocks[1].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Constant);
+		await Assert.That(proto.Blocks[1].Constant.Value).IsEqualTo(20L);
+		await Assert.That(proto.Blocks[1].Constant.Count).IsEqualTo(100);
+	}
+
+	[Test]
+	public async Task MonotonicSplit_ShortPlateau_NoSplit()
+	{
+		// 단조 구간의 짧은 run(<16)은 분리 비용이 더 크므로 단일 Ascending 유지
+		Int64[] input = new Int64[13];
+		input[0] = 0; input[1] = 10;
+		for (Int32 i = 2; i < 12; ++i) input[i] = 20;
+		input[12] = 30;
+
+		var proto = BlockedInteger.Encode(input);
+		var result = BlockedInteger.Decode(proto);
+
+		await PrintCompressionStatistics(proto);
+
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+		await Assert.That(proto.Blocks.Count).IsEqualTo(1);
+		await Assert.That(proto.Blocks[0].BlockOneofCase)
+			.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Ascending);
+	}
+
+	[Test]
+	public async Task MonotonicSplit_ConsecutivePlateaus_EmitsConstantBlocks()
+	{
+		// 타임스탬프 스타일: 같은 값이 덩어리로 반복되며 증가 → Constant 블록 연쇄
+		Int64 t = 1_700_000_000L;
+		List<Int64> list = [];
+		for (Int32 i = 0; i < 20; ++i) list.Add(t);
+		for (Int32 i = 0; i < 20; ++i) list.Add(t + 2);
+		for (Int32 i = 0; i < 20; ++i) list.Add(t + 5);
+		Int64[] input = [.. list];
+
+		var proto = BlockedInteger.Encode(input);
+		var result = BlockedInteger.Decode(proto);
+
+		await PrintCompressionStatistics(proto);
+
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+		await Assert.That(proto.Blocks.Count).IsEqualTo(3);
+		foreach (var block in proto.Blocks)
+		{
+			await Assert.That(block.BlockOneofCase)
+				.IsEqualTo(Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Constant);
+			await Assert.That(block.Constant.Count).IsEqualTo(20);
+		}
+	}
+
+	[Test]
+	public async Task MonotonicSplit_LongArithmeticRun_EmitsArithmeticBlock()
+	{
+		// 비등차 오름차순 사이의 긴 등차 run(≥16) → Arithmetic 블록으로 분리
+		Int64[] head = [0, 7, 9, 14];
+		Int64[] input = new Int64[head.Length + 50 + 1];
+		head.CopyTo(input, 0);
+		for (Int32 i = 0; i < 50; ++i) input[head.Length + i] = 14 + (i + 1) * 5L;
+		input[^1] = input[^2] + 999; // run 종료 후 비등차 값
+
+		var proto = BlockedInteger.Encode(input);
+		var result = BlockedInteger.Decode(proto);
+
+		await PrintCompressionStatistics(proto);
+
+		await Assert.That(result).IsEquivalentTo(input.ToList());
+		await Assert.That(proto.Blocks.Any(b => b.BlockOneofCase ==
+			Pb.BlockedInteger.Types.Block.BlockOneofOneofCase.Arithmetic)).IsTrue();
+	}
+
 	// ─── 특수 입력 ───
 
 	[Test]
