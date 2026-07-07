@@ -95,7 +95,9 @@ public static partial class BlockedInteger
 	/// </summary>
 	/// <remarks>
 	/// 신뢰된 입력 전용. 각 블록의 내부 invariant(Deltas/DeltaOfDeltas 비어있지 않음 등)를
-	/// 검증하지 않습니다. 신뢰할 수 없는 외부 입력은 먼저 <c>Validators</c>로 검증하세요.
+	/// 검증하지 않습니다. 신뢰할 수 없는 외부 입력은 먼저
+	/// <see cref="TryValidate(PbBlockedInteger, Int64, out List{String})"/>로
+	/// (총 개수 상한과 함께) 검증하세요.
 	/// </remarks>
 	/// <returns>디코딩된 Int64 시퀀스</returns>
 	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
@@ -153,7 +155,9 @@ public static partial class BlockedInteger
 	/// <remarks>
 	/// pageIndex 범위를 벗어난 경우 빈 결과를 반환합니다.
 	/// 신뢰된 입력 전용. 각 블록의 내부 invariant를 검증하지 않습니다.
-	/// 신뢰할 수 없는 외부 입력은 먼저 <c>Validators</c>로 검증하세요.
+	/// 신뢰할 수 없는 외부 입력은 먼저
+	/// <see cref="TryValidate(PbBlockedInteger, Int64, out List{String})"/>로
+	/// (총 개수 상한과 함께) 검증하세요.
 	/// </remarks>
 	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
 	/// <exception cref="ArgumentOutOfRangeException">pageIndex &lt; 0 또는 pageSize &lt;= 0인 경우</exception>
@@ -217,7 +221,9 @@ public static partial class BlockedInteger
 	/// <see cref="DecodePage"/>를 페이지 번호로 반복 호출하면 호출마다 블록 목록을 처음부터
 	/// 스캔하지만, 이 메서드는 블록을 한 번만 순회하므로 전체 순차 소비에 효율적입니다.
 	/// 신뢰된 입력 전용. 각 블록의 내부 invariant를 검증하지 않습니다.
-	/// 신뢰할 수 없는 외부 입력은 먼저 <c>Validators</c>로 검증하세요.
+	/// 신뢰할 수 없는 외부 입력은 먼저
+	/// <see cref="TryValidate(PbBlockedInteger, Int64, out List{String})"/>로
+	/// (총 개수 상한과 함께) 검증하세요.
 	/// </remarks>
 	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
 	/// <exception cref="ArgumentOutOfRangeException">pageSize &lt;= 0인 경우</exception>
@@ -265,13 +271,44 @@ public static partial class BlockedInteger
 	/// <summary>
 	/// 블록 구조의 무결성을 검증합니다.
 	/// </summary>
+	/// <remarks>
+	/// 이 오버로드의 전체 값 개수 상한은 <see cref="Int32.MaxValue"/>(List 물리
+	/// 한계)뿐입니다. 네트워크 등 신뢰할 수 없는 경로로 받은 proto에는 상한을
+	/// 명시하는 <see cref="TryValidate(PbBlockedInteger, Int64, out List{String})"/>를
+	/// 사용하세요 - 개별 블록 검증만으로는 블록 *개수*가 제한되지 않아 작은
+	/// 페이로드가 거대한 디코딩 할당으로 증폭될 수 있습니다.
+	/// </remarks>
 	/// <param name="proto">검증할 프로토콜 버퍼</param>
 	/// <param name="errors">발견된 에러 메시지 목록</param>
 	/// <returns>유효하면 true, 그렇지 않으면 false</returns>
 	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
 	public static bool TryValidate(PbBlockedInteger proto, out List<String> errors)
+		=> TryValidate(proto, Int32.MaxValue, out errors);
+
+	/// <summary>
+	/// <see cref="TryValidate(PbBlockedInteger, out List{String})"/>과 같지만 전체
+	/// 디코딩 값 개수에 호출자가 정한 상한을 함께 강제합니다.
+	/// </summary>
+	/// <remarks>
+	/// 신뢰할 수 없는(네트워크) 입력에는 반드시 이 오버로드를 쓰세요. 블록별
+	/// 검증은 블록당 값 개수(8,192)만 제한할 뿐 블록 *개수*는 제한하지 않으므로,
+	/// 블록당 ~10바이트의 wire 비용으로 블록당 8,192개 값이 만들어집니다 - 예를
+	/// 들어 64KB 프레임 하나가 상한 없는 검증을 통과한 채 수천만 개 값(수백 MB)
+	/// 디코딩을 유발할 수 있습니다. 프레임 변환(LZ4 등) 없이도 성립하는 프로토콜
+	/// 내장 압축이므로, 전송 계층의 프레임 크기 제한이 이 증폭을 막아주지 않습니다.
+	/// 상한은 애플리케이션이 그 메시지에서 실제로 기대하는 시퀀스 길이로
+	/// 정하세요(예: 인벤토리 id 목록이면 수천).
+	/// </remarks>
+	/// <param name="proto">검증할 프로토콜 버퍼</param>
+	/// <param name="maxTotalValues">허용할 전체 디코딩 값 개수의 상한(1 이상)</param>
+	/// <param name="errors">발견된 에러 메시지 목록</param>
+	/// <returns>유효하면 true, 그렇지 않으면 false</returns>
+	/// <exception cref="ArgumentNullException">proto가 null인 경우</exception>
+	/// <exception cref="ArgumentOutOfRangeException">maxTotalValues가 1 미만인 경우</exception>
+	public static bool TryValidate(PbBlockedInteger proto, Int64 maxTotalValues, out List<String> errors)
 	{
 		ArgumentNullException.ThrowIfNull(proto);
+		ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxTotalValues);
 		errors = [];
 
 		for (Int32 blockIndex = 0; blockIndex < proto.Blocks.Count; ++blockIndex)
@@ -280,12 +317,14 @@ public static partial class BlockedInteger
 			Validators.ValidateBlock(block, blockIndex, errors);
 		}
 
-		// 전체 값 개수가 List<Int64> 한계를 넘으면 Decode가 예외를 던지므로 여기서 미리 보고한다.
-		// (개별 블록은 유효해도 합계가 초과할 수 있다)
+		// 전체 값 개수 상한을 집행한다. 상한을 명시하지 않은 오버로드에서도
+		// List<Int64> 물리 한계(Int32.MaxValue)를 넘으면 Decode가 예외를 던지므로
+		// 여기서 미리 보고한다. (개별 블록은 유효해도 합계가 초과할 수 있다)
 		Int64 totalCount = Decoders.GetTotalValueCount(proto);
-		if (totalCount > Int32.MaxValue)
+		Int64 effectiveMax = Math.Min(maxTotalValues, Int32.MaxValue);
+		if (totalCount > effectiveMax)
 		{
-			errors.Add($"전체 값 개수({totalCount})가 디코딩 한계({Int32.MaxValue})를 초과");
+			errors.Add($"전체 값 개수({totalCount})가 허용 상한({effectiveMax})을 초과");
 		}
 
 		return errors.Count == 0;

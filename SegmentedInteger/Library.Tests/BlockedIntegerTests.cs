@@ -2621,4 +2621,28 @@ public class BlockedIntegerTests
 		await Assert.That(valid).IsFalse();
 		await Assert.That(errors.Any(e => e.Contains("전체 값 개수"))).IsTrue();
 	}
+
+	[Test]
+	public async Task TryValidateWithCap_RejectsAmplificationBombs_ThatPerBlockChecksAlone_WouldPass()
+	{
+		// 블록별 검증만 통과하는 증폭 폭탄: 블록당 wire 비용 ~10바이트로 8,192개
+		// 값을 선언하는 Constant 블록을 다수 담으면, 작은 페이로드가 검증을
+		// 통과한 채 수백만 개 값 디코딩(수십 MB 할당)으로 부풀 수 있다. 총 개수
+		// 상한 오버로드는 이를 거부해야 한다.
+		var bomb = BuildConstantProto(1_000, 8_192);
+
+		// 블록별 상한(8192)만 검사하는 기존 오버로드는 통과한다 - 이 사실이 곧
+		// 상한 오버로드가 필요한 이유다.
+		await Assert.That(BlockedInteger.TryValidate(bomb, out _)).IsTrue();
+
+		bool capped = BlockedInteger.TryValidate(bomb, maxTotalValues: 100_000, out var cappedErrors);
+		await Assert.That(capped).IsFalse();
+		await Assert.That(cappedErrors.Any(e => e.Contains("허용 상한"))).IsTrue();
+
+		// 정직한 인코딩 결과는 자신의 실제 개수 이상의 상한을 항상 통과한다.
+		var honest = BlockedInteger.Encode(Enumerable.Range(0, 500).Select(static i => (Int64)i).ToArray().AsSpan());
+
+		await Assert.That(BlockedInteger.TryValidate(honest, maxTotalValues: 500, out _)).IsTrue();
+		await Assert.That(BlockedInteger.TryValidate(honest, maxTotalValues: 499, out _)).IsFalse();
+	}
 }
